@@ -21,15 +21,15 @@
       "static/chunks/main-app.js",
       "static/chunks/app/room/[code]/page.js"
     ],
-    "/play/[code]/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/play/[code]/page.js"
-    ],
     "/join/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/join/page.js"
+    ],
+    "/play/[code]/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/play/[code]/page.js"
     ]
   }
 }

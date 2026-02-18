@@ -4,7 +4,7 @@ import { useEffect, useRef, useMemo, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { usePartySocket } from "@/hooks/usePartySocket";
 import { useRoomStore, selectPlayers, selectPhase } from "@/stores/roomStore";
-import type { RoomState } from "@ai-botc/game-logic";
+import CircularSeating from "@/components/CircularSeating";
 
 // Generate or restore a stable host token for this room
 function getOrCreateHostToken(code: string): string {
@@ -122,97 +122,14 @@ export default function HostRoom() {
 
   // ─── Setup phase: arrange seating ───
   if (phase === "setup") {
-    // Get players in seating order
-    const orderedPlayers = seatingOrder
-      .map((id) => players.find((p) => p.id === id))
-      .filter(Boolean) as typeof players;
-
-    const movePlayer = (index: number, direction: "up" | "down") => {
-      const newOrder = [...seatingOrder];
-      const targetIndex = direction === "up" ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= newOrder.length) return;
-      [newOrder[index], newOrder[targetIndex]] = [
-        newOrder[targetIndex],
-        newOrder[index],
-      ];
-      handleSetSeating(newOrder);
-    };
-
     return (
       <main className="flex min-h-screen flex-col items-center p-8">
-        <div className="text-center mb-6">
-          <h1 className="text-3xl font-bold mb-2">Arrange Seating</h1>
-          <p className="text-gray-400">
-            Arrange players in their seating order around the table
-          </p>
-        </div>
-
-        <div className="w-full max-w-md">
-          <div className="bg-gray-800 rounded-lg p-4 mb-6">
-            <ul className="space-y-2">
-              {orderedPlayers.map((player, index) => (
-                <li
-                  key={player.id}
-                  className="bg-gray-700 px-4 py-3 rounded flex items-center"
-                >
-                  <span className="text-gray-500 font-mono w-6 text-sm">
-                    {index + 1}
-                  </span>
-                  <span className="flex-1 font-medium">{player.name}</span>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => movePlayer(index, "up")}
-                      disabled={index === 0}
-                      className="p-1.5 rounded bg-gray-600 hover:bg-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                      aria-label="Move up"
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M5 15l7-7 7 7"
-                        />
-                      </svg>
-                    </button>
-                    <button
-                      onClick={() => movePlayer(index, "down")}
-                      disabled={index === orderedPlayers.length - 1}
-                      className="p-1.5 rounded bg-gray-600 hover:bg-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                      aria-label="Move down"
-                    >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 9l-7 7-7-7"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <button
-            onClick={handleConfirmSeating}
-            className="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-4 px-8 rounded-lg text-xl transition-colors"
-          >
-            Continue to Night
-          </button>
-        </div>
+        <CircularSeating
+          players={players}
+          seatingOrder={seatingOrder}
+          onReorder={handleSetSeating}
+          onConfirm={handleConfirmSeating}
+        />
       </main>
     );
   }
