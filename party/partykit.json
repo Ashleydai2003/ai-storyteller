@@ -1,0 +1,6 @@
+{
+  "$schema": "https://www.partykit.io/schema.json",
+  "name": "ai-botc",
+  "main": "src/room.ts",
+  "compatibilityDate": "2024-01-01"
+}

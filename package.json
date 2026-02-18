@@ -1,0 +1,21 @@
+{
+  "name": "ai-botc",
+  "private": true,
+  "scripts": {
+    "dev:all": "turbo run dev --parallel",
+    "dev:web": "turbo run dev --filter=@ai-botc/web",
+    "dev:party": "turbo run dev --filter=@ai-botc/party",
+    "dev:dashboard": "open http://localhost:3000/dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "type-check": "turbo run type-check"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.2"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=18"
+  }
+}
