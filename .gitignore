@@ -1,1 +1,5 @@
 node_modules
+
+# Documentation files (not for version control)
+PLAN.md
+CLAUDE.md
