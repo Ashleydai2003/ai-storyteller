@@ -55,8 +55,10 @@ export type GamePhase =
   | "setup"        // Host arranging seating
   | "night"        // Night phase
   | "day"          // Day phase - discussion
-  | "nomination"   // Nomination phase
+  | "nomination"   // Nominations open; players may nominate
+  | "accusation"   // One player has been nominated; 5-min accusation/defence timer
   | "voting"       // Voting on a nomination
+  | "dusk"         // Execution announcement — host must dismiss before night begins
   | "ended";       // Game over
 
 // Room State (shared between server and clients)
@@ -74,17 +76,51 @@ export interface RoomState {
   // Night tracking
   currentNightOrder?: number;
 
-  // Nomination/voting
-  playersOnBlock?: string[]; // Player IDs
-  currentNomination?: {
+  // Dawn announcement — who died last night (set at start of each day, cleared after)
+  lastNightDeaths?: string[]; // player names
+
+  // Execution announced at end of day before night begins.
+  // "" = no execution this day; a name = that player was executed.
+  lastExecutedName?: string;
+  // When the block tied, contains the tied player names (no one is executed).
+  lastExecutedTie?: string[];
+
+  // Day phase timer
+  dayTimerEndsAt?: number; // epoch ms — when current day/nomination timer expires
+
+  // Accusation phase — pending nomination waiting for host to start vote
+  pendingNomination?: {
     nominatorId: string;
     nominatedId: string;
-    votes: number;
+    nominatorName: string;
+    nominatedName: string;
   };
-  votesNeeded?: number;
+  accusationTimerEndsAt?: number; // epoch ms — accusation/defence timer
+
+  // Nominations & voting
+  playersOnBlock?: string[];                     // Player IDs currently on the block
+  blockVoteCounts?: Record<string, number>;      // playerId → highest vote count today
+  activeVote?: ActiveVote;                       // in-progress nomination vote
 
   // Hidden state (only on server, not sent to clients)
   // These are managed separately
+
+  // Game over
+  winner?: "good" | "evil"; // Set when phase === "ended"
+  winReason?: string;        // Human-readable reason
+}
+
+// Active vote — one nomination being voted on
+export interface ActiveVote {
+  nominatorId: string;
+  nominatedId: string;
+  nominatorName: string;
+  nominatedName: string;
+  yesVoterIds: string[];          // IDs who voted yes (in order)
+  voterOrder: string[];           // eligible voter IDs, clockwise from nominated+1
+  currentVoterIndex: number;      // who is currently voting
+  voteTimerEndsAt: number;        // epoch ms for current voter's 10s window
+  results: Record<string, boolean>; // playerId → voted yes?
 }
 
 // Night step — one per character wake in the night loop
@@ -113,7 +149,19 @@ export interface ServerGameState {
 
   // Night state tracking
   butlerMasters?: Record<string, string>; // playerId → masterId
-  pendingKills?: string[]; // playerIds marked for death this night
+
+  /**
+   * Player names who actually die this night (after protection/soldier checks).
+   * Populated immediately when the kill resolves so later steps see correct alive state.
+   * Collected into RoomState.lastNightDeaths at endNight().
+   */
+  nightDeaths?: string[];
+
+  /**
+   * The character played by the player who was executed at the end of the previous day.
+   * Cleared when a new day starts. Used by the Undertaker on subsequent nights.
+   */
+  lastExecutedCharacter?: Character;
 }
 
 // WebSocket Messages
@@ -125,6 +173,11 @@ export type ClientMessage =
   | { type: "host:setSeating"; seatingOrder: string[] }
   | { type: "host:confirmSeating" }
   | { type: "host:beginNight" }
+  | { type: "host:startNominations" }
+  | { type: "host:extendTimer"; seconds: number }
+  | { type: "host:startVote" }
+  | { type: "host:goToNight" }
+  | { type: "host:proceedToNight" }
   | { type: "player:acknowledge" }
   | { type: "player:nightAction"; action: NightAction }
   | { type: "player:nominate"; targetId: string }
@@ -142,7 +195,10 @@ export type ServerMessage =
   | { type: "game:announcement"; text: string }
   | { type: "vote:start"; nominatedId: string; nominatorId: string }
   | { type: "vote:turn"; playerId: string; timeRemaining: number }
-  | { type: "vote:result"; playerId: string; voted: boolean };
+  | { type: "vote:result"; playerId: string; voted: boolean }
+  | { type: "vote:end"; nominatedId: string; yesVotes: number; votesNeeded: number; onBlock: boolean }
+  | { type: "day:execution"; playerName: string }
+  | { type: "game:over"; winner: "good" | "evil"; reason: string };
 
 // Night Actions — the server knows which handler is active,
 // so the client just sends selected target(s).
@@ -153,10 +209,26 @@ export type NightAction =
 // Wake Prompts
 export interface WakePrompt {
   character: Character;
-  promptType: "choose" | "info";
+  promptType: "choose" | "info" | "grimoire";
   instruction: string;
   options?: string[]; // Player IDs that can be selected
   selectCount?: number; // How many to select
+  grimoire?: GrimoireEntry[]; // Structured grimoire for Spy (in seating order)
+  /** Structured minion info — shown instead of raw instruction text. */
+  minionInfo?: {
+    demonName: string;
+    otherMinionNames: string[];
+  };
+}
+
+/** One row in the Spy's grimoire — sent in seating order. */
+export interface GrimoireEntry {
+  playerId: string;
+  playerName: string;
+  character: Character;
+  characterType: CharacterType;
+  states: PlayerState[];
+  alive: boolean;
 }
 
 // Player Info (shown to player)

@@ -300,6 +300,49 @@ export class GameLogger {
         console.log(`  "${detail.targetName}" died during the night`);
         break;
 
+      // ── Day phase ──
+
+      case "day:nominationsOpen":
+        console.log(`  Round ${detail.roundNumber} — nominations are now open`);
+        break;
+
+      case "day:nomination":
+        console.log(`  "${detail.nominatorName}" nominated "${detail.nominatedName}"`);
+        break;
+
+      case "day:virginTriggered":
+        console.log(`  ⚔️  Virgin ability! "${detail.nominatorName}" dies for nominating "${detail.nominatedName}"`);
+        break;
+
+      case "day:vote":
+        console.log(`  "${detail.voterName}" voted ${detail.voted ? "YES ✓" : "NO ✗"} (nominated: "${detail.nominatedName}")`);
+        break;
+
+      case "day:voteResult":
+        console.log(`  Vote: "${detail.nominatedName}" — ${detail.yesVotes}/${detail.votesNeeded} votes needed`);
+        console.log(`  On block: ${detail.onBlock ? "YES" : "NO"}. Block: [${(detail.blockAfter as string[]).join(", ")}]`);
+        break;
+
+      case "day:execution":
+        console.log(`  ⚰️  "${detail.playerName}" was executed`);
+        break;
+
+      case "day:tiedExecution":
+        console.log(`  ⚖️  Tied vote — no execution. (${detail.playerNames})`);
+        break;
+
+      case "day:noExecution":
+        console.log(`  No one was on the block — no execution`);
+        break;
+
+      case "day:slayerKill":
+        console.log(`  🗡️  Slayer "${detail.slayerName}" kills Demon "${detail.targetName}"!`);
+        break;
+
+      case "day:slayerMiss":
+        console.log(`  🗡️  Slayer "${detail.slayerName}" targets "${detail.targetName}" — no effect (${detail.reason})`);
+        break;
+
       default:
         // Fallback: pretty-print the JSON
         console.log(

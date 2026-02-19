@@ -265,7 +265,9 @@ export function assignCharacters(
 export function generateDemonBluffs(notInPlay: Character[]): Character[] {
   const validBluffs = notInPlay.filter((c) => {
     const type = CHARACTER_TYPE_MAP[c];
-    return type === "townsfolk" || type === "outsider";
+    // "drunk" is an outsider mechanically but is never a valid bluff —
+    // it's a secret identity that players don't actually hold.
+    return (type === "townsfolk" || type === "outsider") && c !== "drunk";
   });
   return pickRandom(validBluffs, Math.min(3, validBluffs.length));
 }

@@ -29,7 +29,7 @@ export const OTHER_NIGHT_ORDER = [
   // "ravenkeeper",   // TODO
   "empath",
   "fortune_teller",
-  // "undertaker",    // TODO
+  "undertaker",
   "butler",
   "spy",
 ] as const;

@@ -110,3 +110,12 @@ Game Join code:
 etc. 
 
 Consider storing players in a circular linked list for seating order, oopen to suggestions to make game flow better and code more elegant. Stop and get feedback between each implementation phase, host on localhost for now (but consider for future hosting on vercel)
+
+Where AI can be creative:
+- Rearranging characters based on seating arrangement 
+- Assigning the drunk 
+- Picking which two chracters to show to first night characters 
+- Deciding whether kill bounes off mayor or not and who it bounces off to
+- Drunk/poisoned information
+- Picking the red herring for fortune teller 
+- How each player died (storytelling florish)

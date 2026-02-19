@@ -12,6 +12,7 @@
 import type {
   Player,
   Character,
+  GrimoireEntry,
   ServerGameState,
   ServerMessage,
   RoomState,
@@ -210,6 +211,12 @@ export function generateNightSteps(
       return false;
     }
 
+    // Undertaker: only wakes on Night 2+ AND only if an execution happened today
+    if (entry.handler === "undertaker") {
+      if (nightNumber === 1) return false;
+      if (!serverGameState.lastExecutedCharacter) return false;
+    }
+
     // For "imp" handler, resolve the current demon (handles starpass)
     if (entry.handler === "imp") {
       return state.players.some(
@@ -281,6 +288,9 @@ export async function dispatchNightStep(
     case "empath":
       await nightStep_empath(ctx, step, player);
       return true;
+    case "undertaker":
+      await nightStep_undertaker(ctx, step, player);
+      return true;
     case "fortune_teller":
       await nightStep_fortuneTeller(ctx, step, player);
       return true;
@@ -343,15 +353,22 @@ async function nightStep_minionInfo(
     (p) => p.characterRegistration === "minion" && p.id !== step.playerId
   );
 
-  let instruction = `The Demon is ${demon?.name ?? "unknown"}.`;
-  if (otherMinions.length > 0) {
-    const names = otherMinions.map((m) => m.name).join(", ");
-    instruction += ` Your fellow minion${otherMinions.length > 1 ? "s are" : " is"}: ${names}.`;
+  const demonName = demon?.name ?? "unknown";
+  const otherMinionNames = otherMinions.map((m) => m.name);
+
+  let instruction = `The Demon is ${demonName}.`;
+  if (otherMinionNames.length > 0) {
+    instruction += ` Your fellow minion${otherMinionNames.length > 1 ? "s are" : " is"}: ${otherMinionNames.join(", ")}.`;
   }
 
   ctx.sendToToken(step.playerId, {
     type: "player:wake",
-    prompt: { character: player.character!, promptType: "info", instruction },
+    prompt: {
+      character: player.character!,
+      promptType: "info",
+      instruction,
+      minionInfo: { demonName, otherMinionNames },
+    },
   });
 
   await ctx.addLog("night:minionInfo", {
@@ -396,9 +413,8 @@ async function nightStep_poisoner(
   step: NightStep,
   player: Player
 ) {
-  const options = ctx.state.players
-    .filter((p) => p.id !== step.playerId && p.alive)
-    .map((p) => p.id);
+  // Poisoner may target anyone, including themselves and dead players
+  const options = ctx.state.players.map((p) => p.id);
 
   ctx.sendToToken(step.playerId, {
     type: "player:wake",
@@ -680,15 +696,54 @@ async function nightStep_empath(
   });
 }
 
+/** Undertaker: each night* after an execution, learns the character of who was executed. */
+async function nightStep_undertaker(
+  ctx: NightContext,
+  step: NightStep,
+  player: Player
+) {
+  const isDrunkOrPoisoned =
+    player.states.includes("drunk") || player.states.includes("poisoned");
+  let instruction: string;
+
+  if (isDrunkOrPoisoned) {
+    // Show a random character as false info
+    const allChars: Character[] = [
+      "washerwoman", "librarian", "investigator", "chef", "empath",
+      "fortune_teller", "undertaker", "monk", "ravenkeeper", "virgin",
+      "slayer", "soldier", "mayor", "butler", "recluse", "saint",
+      "baron", "spy", "poisoner", "imp",
+    ];
+    const fakeChar = allChars[Math.floor(Math.random() * allChars.length)];
+    instruction = `The executed player was the ${charName(fakeChar)}.`;
+  } else {
+    const executedChar = ctx.serverGameState.lastExecutedCharacter;
+    if (executedChar) {
+      instruction = `The executed player was the ${charName(executedChar)}.`;
+    } else {
+      instruction = "No one was executed today.";
+    }
+  }
+
+  ctx.sendToToken(step.playerId, {
+    type: "player:wake",
+    prompt: { character: player.character!, promptType: "info", instruction },
+  });
+  await ctx.addLog("night:undertaker", {
+    playerName: player.name,
+    instruction,
+    isDrunkOrPoisoned,
+  });
+}
+
 /** Fortune Teller: choose 2 players → learns yes/no if the Demon is among them. */
 async function nightStep_fortuneTeller(
   ctx: NightContext,
   step: NightStep,
   player: Player
 ) {
-  const options = ctx.state.players
-    .filter((p) => p.id !== step.playerId && p.alive)
-    .map((p) => p.id);
+  // Fortune Teller may include themselves and dead players in the 2 chosen players
+  const options = ctx.state.players.map((p) => p.id);
 
   ctx.sendToToken(step.playerId, {
     type: "player:wake",
@@ -714,8 +769,9 @@ async function nightStep_butler(
   step: NightStep,
   player: Player
 ) {
+  // Butler may choose any player (alive or dead), but not themselves
   const options = ctx.state.players
-    .filter((p) => p.id !== step.playerId && p.alive)
+    .filter((p) => p.id !== step.playerId)
     .map((p) => p.id);
 
   ctx.sendToToken(step.playerId, {
@@ -746,25 +802,55 @@ async function nightStep_spy(
   const isDrunkOrPoisoned =
     player.states.includes("drunk") || player.states.includes("poisoned");
 
-  let instruction: string;
   if (isDrunkOrPoisoned) {
-    instruction = "Your ability is not working tonight.";
-  } else {
-    const lines = ctx.state.players.map((p) => {
-      const reg = p.characterRegistration ?? "?";
-      return `• ${p.name}: ${charName(p.character!)} (${reg})${p.states.length ? " [" + p.states.join(", ") + "]" : ""}`;
+    ctx.sendToToken(step.playerId, {
+      type: "player:wake",
+      prompt: {
+        character: player.character!,
+        promptType: "info",
+        instruction: "Your ability is not working tonight.",
+      },
     });
-    instruction = "Grimoire:\n" + lines.join("\n");
+    await ctx.addLog("night:spy", {
+      playerName: player.name,
+      instruction: "Your ability is not working tonight.",
+      isDrunkOrPoisoned: true,
+    });
+    return;
   }
+
+  // Build structured grimoire entries in seating order
+  const seating = ctx.state.seatingOrder ?? ctx.state.players.map((p) => p.id);
+  const grimoire: GrimoireEntry[] = seating
+    .map((id) => ctx.state.players.find((p) => p.id === id))
+    .filter((p): p is Player => p !== undefined)
+    .map((p) => ({
+      playerId: p.id,
+      playerName: p.name,
+      character: p.character!,
+      characterType: p.characterRegistration ?? p.characterType!,
+      states: [...p.states],
+      alive: p.alive,
+    }));
 
   ctx.sendToToken(step.playerId, {
     type: "player:wake",
-    prompt: { character: player.character!, promptType: "info", instruction },
+    prompt: {
+      character: player.character!,
+      promptType: "grimoire",
+      instruction: "You see the Grimoire.",
+      grimoire,
+    },
   });
+
+  const textLines = grimoire.map(
+    (e) =>
+      `• ${e.playerName}: ${charName(e.character)} (${e.characterType})${e.states.length ? " [" + e.states.join(", ") + "]" : ""}`
+  );
   await ctx.addLog("night:spy", {
     playerName: player.name,
-    instruction,
-    isDrunkOrPoisoned,
+    instruction: "Grimoire:\n" + textLines.join("\n"),
+    isDrunkOrPoisoned: false,
   });
 }
 
@@ -774,8 +860,9 @@ async function nightStep_monk(
   step: NightStep,
   player: Player
 ) {
+  // Monk may protect any player (alive or dead), but not themselves
   const options = ctx.state.players
-    .filter((p) => p.id !== step.playerId && p.alive)
+    .filter((p) => p.id !== step.playerId)
     .map((p) => p.id);
 
   ctx.sendToToken(step.playerId, {
@@ -963,13 +1050,19 @@ async function resolveNight_monk(
   await ctx.sleepAndAdvance(step.playerId);
 }
 
-/** Imp chose someone to kill (or self → starpass). */
+/** Imp chose someone to kill (or self → starpass, or nobody → no kill). */
 async function resolveNight_imp(
   ctx: NightContext,
   step: NightStep,
   player: Player,
   action: NightAction
 ) {
+  if (action.action === "none") {
+    await ctx.addLog("night:impSkip", { playerName: player.name });
+    await ctx.sleepAndAdvance(step.playerId);
+    return;
+  }
+
   if (action.action === "choose" && action.targetIds.length === 1) {
     const targetId = action.targetIds[0];
 
@@ -985,6 +1078,8 @@ async function resolveNight_imp(
         newImp.characterType = "demon";
         newImp.characterRegistration = "demon";
         player.alive = false;
+        if (!ctx.serverGameState.nightDeaths) ctx.serverGameState.nightDeaths = [];
+        ctx.serverGameState.nightDeaths.push(player.name);
         await ctx.persistState();
         ctx.sendToToken(newImp.id, {
           type: "character:reveal",
@@ -998,21 +1093,40 @@ async function resolveNight_imp(
       } else {
         // No minions alive — Imp just dies
         player.alive = false;
+        if (!ctx.serverGameState.nightDeaths) ctx.serverGameState.nightDeaths = [];
+        ctx.serverGameState.nightDeaths.push(player.name);
         await ctx.persistState();
         await ctx.addLog("night:impSuicide", { impName: player.name });
       }
     } else {
-      // ── Normal kill — add to pending kills (resolved at end of night) ──
-      if (!ctx.serverGameState.pendingKills) {
-        ctx.serverGameState.pendingKills = [];
-      }
-      ctx.serverGameState.pendingKills.push(targetId);
-      await ctx.persistServerState();
+      // ── Normal kill — resolved immediately so later steps see the correct alive state ──
       const target = ctx.state.players.find((p) => p.id === targetId);
       await ctx.addLog("night:impKill", {
         playerName: player.name,
         targetName: target?.name ?? "unknown",
       });
+
+      if (target && target.alive) {
+        const isProtected = target.states.includes("protected");
+        const isSoldier =
+          target.character === "soldier" &&
+          !target.states.includes("drunk") &&
+          !target.states.includes("poisoned");
+
+        if (isProtected || isSoldier) {
+          await ctx.addLog("night:killPrevented", {
+            targetName: target.name,
+            reason: isProtected ? "protected" : "soldier",
+          });
+        } else {
+          target.alive = false;
+          if (!ctx.serverGameState.nightDeaths) ctx.serverGameState.nightDeaths = [];
+          ctx.serverGameState.nightDeaths.push(target.name);
+          await ctx.addLog("night:playerDied", { targetName: target.name });
+          await ctx.persistState();
+        }
+      }
+      await ctx.persistServerState();
     }
   }
   await ctx.sleepAndAdvance(step.playerId);
