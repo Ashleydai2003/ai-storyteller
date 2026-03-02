@@ -120,6 +120,12 @@ export interface BagResult {
   notInPlay: Character[];
 }
 
+/** Options for generating a character bag */
+export interface GenerateBagOptions {
+  /** Characters that must be included in the game (host selections) */
+  requiredCharacters?: Character[];
+}
+
 /**
  * Generate a random bag of characters for Trouble Brewing.
  *
@@ -127,19 +133,37 @@ export interface BagResult {
  * - Baron: if drawn as a minion, +2 outsiders and -2 townsfolk
  * - Drunk: if drawn as an outsider, pick an extra townsfolk to show the drunk player
  *   (that townsfolk is NOT actually in the game)
+ * - Required characters from the host will be included, remaining slots filled randomly
  */
-export function generateBag(playerCount: number): BagResult {
+export function generateBag(playerCount: number, options?: GenerateBagOptions): BagResult {
   const dist = PLAYER_DISTRIBUTION[playerCount];
   if (!dist) {
     throw new Error(`Invalid player count: ${playerCount}. Must be 5-15.`);
   }
 
+  const requiredCharacters = options?.requiredCharacters ?? [];
+
+  // Separate required characters by type
+  const requiredTownsfolk = requiredCharacters.filter(
+    (c): c is TownsfolkCharacter => ALL_TOWNSFOLK.includes(c as TownsfolkCharacter)
+  );
+  const requiredOutsiders = requiredCharacters.filter(
+    (c): c is OutsiderCharacter => ALL_OUTSIDERS.includes(c as OutsiderCharacter)
+  );
+  const requiredMinions = requiredCharacters.filter(
+    (c): c is MinionCharacter => ALL_MINIONS.includes(c as MinionCharacter)
+  );
+  // Demon is always imp in Trouble Brewing, so we ignore required demons
+
   let { townsfolk: numTownsfolk, outsiders: numOutsiders, minions: numMinions } = dist;
 
   // Step 1: Draw minions first (Baron affects composition)
-  const drawnMinions = pickRandom(ALL_MINIONS, numMinions);
+  // Include required minions, fill remaining slots randomly
+  const availableMinions = ALL_MINIONS.filter((m) => !requiredMinions.includes(m));
+  const additionalMinions = pickRandom(availableMinions, Math.max(0, numMinions - requiredMinions.length));
+  const drawnMinions: MinionCharacter[] = [...requiredMinions, ...additionalMinions].slice(0, numMinions);
 
-  // If Baron is drawn, adjust: +2 outsiders, -2 townsfolk
+  // If Baron is drawn (required or random), adjust: +2 outsiders, -2 townsfolk
   if (drawnMinions.includes("baron")) {
     numOutsiders = Math.min(numOutsiders + 2, ALL_OUTSIDERS.length);
     numTownsfolk = playerCount - numOutsiders - numMinions - 1; // -1 for demon
@@ -149,20 +173,28 @@ export function generateBag(playerCount: number): BagResult {
   const drawnDemons: DemonCharacter[] = ["imp"];
 
   // Step 3: Draw outsiders
-  const drawnOutsiders = pickRandom(ALL_OUTSIDERS, numOutsiders);
+  // Include required outsiders, fill remaining slots randomly
+  const availableOutsiders = ALL_OUTSIDERS.filter((o) => !requiredOutsiders.includes(o));
+  const additionalOutsiders = pickRandom(availableOutsiders, Math.max(0, numOutsiders - requiredOutsiders.length));
+  const drawnOutsiders: OutsiderCharacter[] = [...requiredOutsiders, ...additionalOutsiders].slice(0, numOutsiders);
 
   // Step 4: Draw townsfolk
   let drunkAs: TownsfolkCharacter | null = null;
   let drawnTownsfolk: TownsfolkCharacter[];
 
+  // Include required townsfolk, fill remaining slots randomly
+  const availableTownsfolk = ALL_TOWNSFOLK.filter((t) => !requiredTownsfolk.includes(t));
+
   if (drawnOutsiders.includes("drunk")) {
     // Drunk is in play — pick one extra townsfolk for the drunk to "be"
     // The drunk will see this townsfolk character, but the actual character is "drunk"
-    drawnTownsfolk = pickRandom(ALL_TOWNSFOLK, numTownsfolk + 1);
+    const additionalTownsfolk = pickRandom(availableTownsfolk, Math.max(0, numTownsfolk + 1 - requiredTownsfolk.length));
+    drawnTownsfolk = [...requiredTownsfolk, ...additionalTownsfolk].slice(0, numTownsfolk + 1);
     // Last one is the "fake" townsfolk the drunk thinks they are
     drunkAs = drawnTownsfolk.pop()!;
   } else {
-    drawnTownsfolk = pickRandom(ALL_TOWNSFOLK, numTownsfolk);
+    const additionalTownsfolk = pickRandom(availableTownsfolk, Math.max(0, numTownsfolk - requiredTownsfolk.length));
+    drawnTownsfolk = [...requiredTownsfolk, ...additionalTownsfolk].slice(0, numTownsfolk);
   }
 
   // Build the full bag
@@ -243,11 +275,21 @@ export function assignCharacters(
     player.character = a.character;
     player.characterType = a.type;
 
-    // What the game mechanics use (always matches visible type, except for Drunk)
-    player.characterRegistration = a.actualType;
+    // True character (differs from character only for Drunk)
+    player.trueCharacter = a.isDrunk ? "drunk" : a.character;
+
+    // How this player registers to information abilities
+    if (a.character === "recluse" && !a.isDrunk) {
+      // Recluse registers as outsider, minion, or demon (random)
+      const registrations: CharacterType[] = ["outsider", "minion", "demon"];
+      player.characterRegistration = registrations[Math.floor(Math.random() * 3)];
+    } else {
+      // Everyone else registers as their actual type
+      player.characterRegistration = a.actualType;
+    }
 
     // Track actual character for server reference
-    actualCharacters.set(player.id, a.character);
+    actualCharacters.set(player.id, player.trueCharacter);
 
     // If the player is the drunk, add the drunk state
     if (a.isDrunk) {

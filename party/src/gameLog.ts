@@ -198,64 +198,28 @@ export class GameLogger {
         );
         break;
 
-      // ── Night step wakes (what the player sees) ──
-
+      // ── Night info characters (info-only wakes) ──
       case "night:washerwoman":
       case "night:librarian":
       case "night:investigator":
-        console.log(`  Player: "${detail.playerName}" woke up`);
-        console.log(`  Shown: ${detail.instruction}`);
-        if (detail.isDrunkOrPoisoned) console.log(`  ⚠ Drunk/Poisoned → info may be false`);
-        break;
-
       case "night:chef":
-        console.log(`  Player: "${detail.playerName}" woke up`);
-        console.log(`  Shown: ${detail.instruction}`);
-        console.log(`  Evil-pair count: ${detail.count}`);
-        if (detail.isDrunkOrPoisoned) console.log(`  ⚠ Drunk/Poisoned → info may be false`);
-        break;
-
       case "night:empath":
-        console.log(`  Player: "${detail.playerName}" woke up`);
-        console.log(`  Shown: ${detail.instruction}`);
-        console.log(`  Evil-neighbour count: ${detail.count}`);
-        if (detail.isDrunkOrPoisoned) console.log(`  ⚠ Drunk/Poisoned → info may be false`);
-        break;
-
       case "night:spy":
         console.log(`  Player: "${detail.playerName}" woke up`);
         console.log(`  Shown: ${detail.instruction}`);
-        if (detail.isDrunkOrPoisoned) console.log(`  ⚠ Drunk/Poisoned → ability blocked`);
+        if (detail.count !== undefined) console.log(`  Count: ${detail.count}`);
+        if (detail.isDrunkOrPoisoned) console.log(`  ⚠ Drunk/Poisoned → info may be false`);
         break;
 
+      // ── Night choice characters (choose a target) ──
       case "night:poisonerWake":
-        console.log(`  Player: "${detail.playerName}" woke up`);
-        console.log(`  Prompt: ${detail.instruction}`);
-        console.log(`  Options: ${(detail.options as string[]).join(", ")}`);
-        break;
-
       case "night:fortuneTellerWake":
-        console.log(`  Player: "${detail.playerName}" woke up`);
-        console.log(`  Prompt: ${detail.instruction}`);
-        console.log(`  Options: ${(detail.options as string[]).join(", ")}`);
-        break;
-
       case "night:butlerWake":
-        console.log(`  Player: "${detail.playerName}" woke up`);
-        console.log(`  Prompt: ${detail.instruction}`);
-        console.log(`  Options: ${(detail.options as string[]).join(", ")}`);
-        break;
-
       case "night:monkWake":
-        console.log(`  Player: "${detail.playerName}" woke up`);
-        console.log(`  Prompt: ${detail.instruction}`);
-        console.log(`  Options: ${(detail.options as string[]).join(", ")}`);
-        break;
-
       case "night:impWake":
         console.log(`  Player: "${detail.playerName}" woke up`);
         console.log(`  Prompt: ${detail.instruction}`);
-        console.log(`  Options: ${(detail.options as string[]).join(", ")}`);
+        if (detail.options) console.log(`  Options: ${(detail.options as string[]).join(", ")}`);
         break;
 
       // ── Night resolver actions (what the player chose) ──

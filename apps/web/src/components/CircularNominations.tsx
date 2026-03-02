@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from "react";
 import type { Player } from "@ai-botc/game-logic";
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Types
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+import {
+  computeRingSize,
+  computeSeatPosition,
+  getInitials,
+} from "@/lib/circularLayout";
 
 interface CircularNominationsProps {
   /** All players in the game. */
@@ -22,10 +23,10 @@ interface CircularNominationsProps {
   onNominate: (targetId: string) => void;
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Main component
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+/**
+ * Nomination interface during nomination phase.
+ * Two-step flow: tap to select, then confirm button to nominate.
+ */
 export default function CircularNominations({
   players,
   seatingOrder,
@@ -34,7 +35,6 @@ export default function CircularNominations({
   canINominate,
   onNominate,
 }: CircularNominationsProps) {
-  // Two-step: first select, then confirm with the Nominate button
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const handleNominate = () => {
@@ -52,15 +52,10 @@ export default function CircularNominations({
     [seatingOrder, players]
   );
 
-  // Ring dimensions
-  const ringSize = useMemo(() => {
-    const count = orderedPlayers.length;
-    if (count <= 6) return { container: 300, radius: 105 };
-    if (count <= 9) return { container: 360, radius: 130 };
-    if (count <= 12) return { container: 420, radius: 160 };
-    return { container: 480, radius: 190 };
-  }, [orderedPlayers.length]);
-
+  const ringSize = useMemo(
+    () => computeRingSize(orderedPlayers.length),
+    [orderedPlayers.length]
+  );
   const center = ringSize.container / 2;
 
   const selectedPlayer = selectedId
@@ -86,16 +81,19 @@ export default function CircularNominations({
         />
 
         {orderedPlayers.map((player, index) => {
-          const angle = (2 * Math.PI * index) / orderedPlayers.length - Math.PI / 2;
-          const x = center + ringSize.radius * Math.cos(angle);
-          const y = center + ringSize.radius * Math.sin(angle);
+          const { x, y } = computeSeatPosition(
+            index,
+            orderedPlayers.length,
+            ringSize.radius,
+            center
+          );
 
           const isMe = player.id === myId;
           const isDead = !player.alive;
           const isOnBlock = onBlock.includes(player.id);
           const isSelected = player.id === selectedId;
-          // A player can be nominated if: alive, not already nominated today, not yourself
-          const canBeNominated = player.alive && player.ableToBeNominated && !isMe;
+          // A player can be nominated if: not already nominated today (dead players and self can be nominated)
+          const canBeNominated = player.ableToBeNominated;
           // Clickable only if I can still nominate and this is a valid target
           const isClickable = canINominate && canBeNominated;
 
@@ -202,17 +200,4 @@ export default function CircularNominations({
       </button>
     </div>
   );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Helpers
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 }

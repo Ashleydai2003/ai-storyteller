@@ -1,4 +1,18 @@
-// Character Types
+/**
+ * Core type definitions for Blood on the Clocktower game logic.
+ *
+ * This file defines:
+ * - Character types and names (Trouble Brewing edition)
+ * - Player state model
+ * - Game phases and room state
+ * - WebSocket message protocols
+ * - Night action and wake prompt types
+ */
+
+// ─────────────────────────────────────────────────────────────
+// Characters (Trouble Brewing edition)
+// ─────────────────────────────────────────────────────────────
+
 export type CharacterType = "townsfolk" | "outsider" | "minion" | "demon";
 
 export type TownsfolkCharacter =
@@ -32,24 +46,56 @@ export type Character =
   | MinionCharacter
   | DemonCharacter;
 
-// Player State
+// ─────────────────────────────────────────────────────────────
+// Player Model
+// ─────────────────────────────────────────────────────────────
+
+/** Active effects on a player */
 export type PlayerState = "drunk" | "poisoned" | "protected";
 
 export interface Player {
+  /** Stable UUID token (NOT WebSocket connection ID) */
   id: string;
   name: string;
   alive: boolean;
+  /**
+   * What the player sees as their character.
+   * May differ from trueCharacter for Drunk (sees a Townsfolk).
+   */
   character: Character | null;
+  /**
+   * The actual character (e.g., "drunk" for a Drunk who thinks they're Empath).
+   * Same as character for most players.
+   */
+  trueCharacter: Character | null;
+  /**
+   * What the player sees as their type (townsfolk/outsider/minion/demon).
+   * May differ from actual for Drunk.
+   */
   characterType: CharacterType | null;
-  characterRegistration: CharacterType | null; // Actual type for game mechanics
+  /**
+   * How this player registers to information abilities.
+   * - Most players: same as their actual type
+   * - Drunk: "outsider" (their true type)
+   * - Recluse: randomly "minion" or "demon" (set at game start)
+   */
+  characterRegistration: CharacterType | null;
+  /** Active effects: drunk, poisoned, protected */
   states: PlayerState[];
+  /** Has one-shot ability remaining (e.g., Slayer) */
   ability: boolean;
+  /** Can nominate someone today (reset each day, false if dead) */
   ableToNominate: boolean;
+  /** Can be nominated today (becomes false after being nominated once) */
   ableToBeNominated: boolean;
+  /** Has used their one dead vote */
   deadVoted: boolean;
 }
 
-// Game Phases
+// ─────────────────────────────────────────────────────────────
+// Game Phases & Room State
+// ─────────────────────────────────────────────────────────────
+
 export type GamePhase =
   | "waiting"      // Waiting for players to join
   | "setup"        // Host arranging seating
@@ -61,12 +107,20 @@ export type GamePhase =
   | "dusk"         // Execution announcement — host must dismiss before night begins
   | "ended";       // Game over
 
-// Room State (shared between server and clients)
+/**
+ * Room state shared between server and all clients.
+ * This is the single source of truth broadcast to everyone.
+ * Secret info (character assignments, demon bluffs) is sent via targeted messages.
+ */
 export interface RoomState {
   phase: GamePhase;
   players: Player[];
   hostId: string | null;
   gameJoinCode: string;
+
+  // Setup phase — host character selection
+  selectedCharacters?: Character[]; // Characters the host wants to include
+  setupComplete?: boolean;          // Host has finished setup (characters + seating)
 
   // Game-specific state (populated after setup)
   seatingOrder?: string[]; // Player IDs in seating order
@@ -108,9 +162,12 @@ export interface RoomState {
   // Game over
   winner?: "good" | "evil"; // Set when phase === "ended"
   winReason?: string;        // Human-readable reason
+
+  // Mini-game leaderboard (accumulated across all nights)
+  miniGameLeaderboard?: MiniGameLeaderboard;
 }
 
-// Active vote — one nomination being voted on
+/** In-progress vote on a nomination */
 export interface ActiveVote {
   nominatorId: string;
   nominatedId: string;
@@ -123,28 +180,18 @@ export interface ActiveVote {
   results: Record<string, boolean>; // playerId → voted yes?
 }
 
-// Night step — one per character wake in the night loop
-export interface NightStep {
-  handler: string; // Which handler to run: "minion_info", "demon_info", "poisoner", etc.
-  playerId: string;
-  playerName: string;
-  character: Character;
-}
-
-// Server-only state (never sent to clients)
+/**
+ * Server-only state — NEVER sent to clients.
+ * Contains secret information like true character assignments and demon bluffs.
+ */
 export interface ServerGameState {
   demonBluffs: Character[];
   fortuneTellerRedHerring?: string; // Player ID
   actualCharacters: Map<string, Character>; // Player ID -> actual character
 
-  // Pre-computed night orders — built once when characters are assigned.
-  // Each entry is a NightStep template; at runtime we filter for alive players.
-  firstNightOrder: NightStep[];
-  otherNightsOrder: NightStep[];
-
   // Current-night execution state
-  nightSteps?: NightStep[];
-  currentNightStepIndex?: number;
+  currentNightHandler?: string; // Current character handler being executed
+  currentNightHandlerIndex?: number; // Index in the night order
   currentStepPhase?: "awaiting_action" | "awaiting_acknowledge";
 
   // Night state tracking
@@ -162,11 +209,37 @@ export interface ServerGameState {
    * Cleared when a new day starts. Used by the Undertaker on subsequent nights.
    */
   lastExecutedCharacter?: Character;
+  /**
+   * The character registration of the executed player (for Recluse handling in Undertaker).
+   */
+  lastExecutedRegistration?: CharacterType;
+  /**
+   * Player ID of who was executed yesterday (for "died-today" reminder token).
+   * Cleared when a new day starts.
+   */
+  lastExecutedPlayerId?: string;
+
+  /**
+   * Reminder tokens for information abilities (tracks Storyteller info).
+   * Used by Spy grimoire to show which players were presented to which abilities.
+   */
+  investigatorMinion?: string; // Player ID shown as minion to Investigator
+  investigatorWrong?: string; // Player ID shown as "wrong" to Investigator
+  librarianOutsider?: string; // Player ID shown as outsider to Librarian
+  librarianWrong?: string; // Player ID shown as "wrong" to Librarian
+  washerwomanTownsfolk?: string; // Player ID shown as townsfolk to Washerwoman
+  washerwomanWrong?: string; // Player ID shown as "wrong" to Washerwoman
 }
 
-// WebSocket Messages
+// ─────────────────────────────────────────────────────────────
+// WebSocket Message Protocols
+// ─────────────────────────────────────────────────────────────
+
+/** Messages sent from client to server */
 export type ClientMessage =
   | { type: "host:create"; token: string }
+  | { type: "host:setApiKey"; provider: "anthropic" | "openai"; apiKey: string }
+  | { type: "host:setCharacters"; characters: Character[] }
   | { type: "player:join"; name: string; token: string }
   | { type: "player:leave" }
   | { type: "host:start" }
@@ -182,11 +255,14 @@ export type ClientMessage =
   | { type: "player:nightAction"; action: NightAction }
   | { type: "player:nominate"; targetId: string }
   | { type: "player:vote"; vote: boolean }
-  | { type: "player:slay"; targetId: string };
+  | { type: "player:slay"; targetId: string }
+  | { type: "minigame:score"; night: number; game: MiniGameType; score: number };
 
+/** Messages sent from server to client */
 export type ServerMessage =
   | { type: "sync"; state: RoomState }
   | { type: "error"; message: string }
+  | { type: "api:keySet"; provider: "anthropic" | "openai"; success: boolean }
   | { type: "character:reveal"; character: Character; characterType: CharacterType }
   | { type: "demon:bluffs"; bluffs: Character[] }
   | { type: "player:wake"; prompt: WakePrompt }
@@ -198,15 +274,22 @@ export type ServerMessage =
   | { type: "vote:result"; playerId: string; voted: boolean }
   | { type: "vote:end"; nominatedId: string; yesVotes: number; votesNeeded: number; onBlock: boolean }
   | { type: "day:execution"; playerName: string }
-  | { type: "game:over"; winner: "good" | "evil"; reason: string };
+  | { type: "game:over"; winner: "good" | "evil"; reason: string }
+  | { type: "debug:log"; level: "log" | "info" | "warn" | "error"; message: string; data?: unknown; timestamp: string };
 
-// Night Actions — the server knows which handler is active,
-// so the client just sends selected target(s).
+// ─────────────────────────────────────────────────────────────
+// Night Phase Types
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Player's response to a night action prompt.
+ * Server knows which handler is active, so client just sends targets.
+ */
 export type NightAction =
   | { action: "choose"; targetIds: string[] } // Player selected 1+ targets
   | { action: "none" };                        // No action / skip
 
-// Wake Prompts
+/** Prompt shown to a player when they wake during the night */
 export interface WakePrompt {
   character: Character;
   promptType: "choose" | "info" | "grimoire";
@@ -221,6 +304,25 @@ export interface WakePrompt {
   };
 }
 
+/** Reminder token types for the Spy's grimoire */
+export type ReminderToken =
+  | "died-today"
+  | "drunk"
+  | "imp-dead"
+  | "investigator-minion"
+  | "investigator-wrong"
+  | "librarian-outsider"
+  | "librarian-wrong"
+  | "washerwoman-townsfolk"
+  | "washerwoman-wrong"
+  | "poisoned"
+  | "red-herring"
+  | "scarlet-woman-imp"
+  | "slayer-no-ability"
+  | "virgin-no-ability"
+  | "butler-master"
+  | "protected";
+
 /** One row in the Spy's grimoire — sent in seating order. */
 export interface GrimoireEntry {
   playerId: string;
@@ -229,18 +331,108 @@ export interface GrimoireEntry {
   characterType: CharacterType;
   states: PlayerState[];
   alive: boolean;
+  /** Reminder tokens for this player (used by Spy grimoire) */
+  reminderTokens?: ReminderToken[];
 }
 
-// Player Info (shown to player)
+// ─────────────────────────────────────────────────────────────
+// Misc Types
+// ─────────────────────────────────────────────────────────────
+
+/** Generic info message shown to a player */
 export interface PlayerInfo {
   message: string;
   players?: { id: string; name: string }[];
   character?: Character;
 }
 
-// Persistent game log entry
+/** Persistent game log entry for debugging */
 export interface GameLogEntry {
   timestamp: string; // ISO 8601
   event: string; // Machine-readable event name
   detail: Record<string, unknown>; // Structured payload
 }
+
+// ─────────────────────────────────────────────────────────────
+// Character System Types (for new architecture)
+// ─────────────────────────────────────────────────────────────
+
+/** Context passed to character setup functions */
+export interface SetupContext {
+  players: Player[];
+  serverGameState: ServerGameState;
+  roomState: RoomState;
+  /** Deterministic random function (for testing) */
+  random: () => number;
+}
+
+/** State updates returned by setup functions */
+export interface SetupResult {
+  playerUpdates?: Map<string, Partial<Player>>;
+  serverStateUpdates?: Partial<ServerGameState>;
+  roomStateUpdates?: Partial<RoomState>;
+}
+
+/** Context passed to night handler functions */
+export interface NightContext extends SetupContext {
+  playerId: string;
+  targetIds?: string[];
+}
+
+/** Result returned by night handler functions */
+export interface NightResult {
+  playerUpdates?: Map<string, Partial<Player>>;
+  serverStateUpdates?: Partial<ServerGameState>;
+  announcement?: string;
+  wakePrompt?: WakePrompt;
+  skipAcknowledge?: boolean;
+}
+
+/** Context passed to day ability functions */
+export interface DayContext extends SetupContext {
+  actorId: string;
+  targetId?: string;
+}
+
+/** Result returned by day ability functions */
+export interface DayResult {
+  playerUpdates?: Map<string, Partial<Player>>;
+  serverStateUpdates?: Partial<ServerGameState>;
+  roomStateUpdates?: Partial<RoomState>;
+  announcement?: string;
+  success: boolean;
+}
+
+/** Context passed to win condition checkers */
+export interface WinContext {
+  players: Player[];
+  serverGameState: ServerGameState;
+  roomState: RoomState;
+}
+
+/** Result returned by win condition checkers */
+export interface WinResult {
+  gameOver: boolean;
+  winner?: "good" | "evil";
+  reason?: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Mini-Game Types
+// ─────────────────────────────────────────────────────────────
+
+export type MiniGameType = "jumping" | "falling" | "catching" | "reaction";
+
+export interface MiniGameScore {
+  night: number;
+  game: MiniGameType;
+  score: number;
+}
+
+export interface MiniGamePlayerStats {
+  playerName: string;
+  totalScore: number;
+  gameScores: MiniGameScore[];
+}
+
+export type MiniGameLeaderboard = Record<string, MiniGamePlayerStats>;

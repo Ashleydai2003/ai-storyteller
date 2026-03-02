@@ -6,8 +6,22 @@ import { usePartySocket } from "@/hooks/usePartySocket";
 import { useRoomStore, selectPlayers, selectPhase } from "@/stores/roomStore";
 import CircularSeating from "@/components/CircularSeating";
 import CircularSeatingView from "@/components/CircularSeatingView";
+import CircularGrimoire from "@/components/CircularGrimoire";
 import DawnAnnouncement from "@/components/DawnAnnouncement";
 import DuskAnnouncement from "@/components/DuskAnnouncement";
+import AnnouncementToast, { type Announcement } from "@/components/AnnouncementToast";
+import SlideshowRetelling from "@/components/SlideshowRetelling";
+import {
+  playNominationSound,
+  playSlayerSound,
+  playDeathSound,
+  playVoteYesSound,
+  playVoteNoSound,
+  playVoteEndSound,
+  playVirginSound,
+} from "@/lib/sounds";
+import type { ServerMessage, Character } from "@ai-botc/game-logic";
+import { CHARACTER_DISPLAY_NAMES } from "@/lib/characterNames";
 
 // Generate or restore a stable host token for this room
 function getOrCreateHostToken(code: string): string {
@@ -51,6 +65,82 @@ export default function HostRoom() {
   const [announcementDismissed, setAnnouncementDismissed] = useState(false);
   const lastAnnouncedRound = useRef<number | null>(null);
 
+  // API key configuration (optional, for AI retelling)
+  const [showApiKeyConfig, setShowApiKeyConfig] = useState(false);
+  const [apiKeyProvider, setApiKeyProvider] = useState<"anthropic" | "openai">("anthropic");
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [apiKeySet, setApiKeySet] = useState(false);
+
+  // Slideshow retelling state
+  const [slideshow, setSlideshow] = useState<{
+    slides: Array<{ title: string; content: string[]; nightNumber?: number }>;
+    winner: "good" | "evil";
+    winReason: string;
+    aiNarrative?: {
+      narrative: string;
+      highlights: string[];
+      notablePlays: string[];
+    } | null;
+  } | null>(null);
+  const [slideshowLoading, setSlideshowLoading] = useState(false);
+  const hasFetchedSlideshow = useRef(false);
+
+  // Grimoire state
+  const [grimoire, setGrimoire] = useState<any[] | null>(null);
+  const [grimoireLoading, setGrimoireLoading] = useState(false);
+
+  // Toast announcements for day events
+  const [toasts, setToasts] = useState<Announcement[]>([]);
+  const addToast = useCallback((text: string, type: Announcement["type"]) => {
+    const id = crypto.randomUUID();
+    setToasts((prev) => [...prev, { id, text, type }]);
+  }, []);
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  // Handle server messages for announcements and sounds
+  const handleServerMessage = useCallback(
+    (message: ServerMessage) => {
+      switch (message.type) {
+        case "game:announcement":
+          // Parse the announcement text to determine type and play sound
+          if (message.text.includes("Virgin")) {
+            playVirginSound();
+            addToast(message.text, "virgin");
+          } else if (message.text.includes("Slayer")) {
+            playSlayerSound();
+            addToast(message.text, "slayer");
+          } else {
+            addToast(message.text, "info");
+          }
+          break;
+
+        case "vote:result":
+          if (message.voted) {
+            playVoteYesSound();
+          } else {
+            playVoteNoSound();
+          }
+          break;
+
+        case "vote:end":
+          playVoteEndSound();
+          const result = message.onBlock
+            ? `Vote passed! ${message.yesVotes} votes.`
+            : `Vote failed. ${message.yesVotes}/${message.votesNeeded} needed.`;
+          addToast(result, "vote");
+          break;
+
+        case "day:execution":
+          playDeathSound();
+          addToast(`${message.playerName} has been executed.`, "death");
+          break;
+      }
+    },
+    [addToast]
+  );
+
   // Stable host token
   const token = useMemo(
     () => (typeof window !== "undefined" ? getOrCreateHostToken(code) : ""),
@@ -65,6 +155,7 @@ export default function HostRoom() {
   const { send, isConnected } = usePartySocket({
     roomCode: code,
     onStateSync: syncRoomState,
+    onMessage: handleServerMessage,
   });
 
   // Register as host when connected
@@ -82,7 +173,89 @@ export default function HostRoom() {
     }
   }, [phase]);
 
+  // Play nomination sound and show toast when entering accusation phase
+  const pendingNomination = roomState?.pendingNomination;
+  const prevPendingRef = useRef<string | null>(null);
+  useEffect(() => {
+    const pendingKey = pendingNomination
+      ? `${pendingNomination.nominatorId}-${pendingNomination.nominatedId}`
+      : null;
+    if (pendingNomination && prevPendingRef.current !== pendingKey) {
+      playNominationSound();
+      addToast(
+        `${pendingNomination.nominatorName} nominated ${pendingNomination.nominatedName}`,
+        "nomination"
+      );
+    }
+    prevPendingRef.current = pendingKey;
+  }, [pendingNomination, addToast]);
+
   const handleStartGame = () => send({ type: "host:start" });
+  const handleSetApiKey = () => {
+    if (apiKeyInput.trim()) {
+      send({ type: "host:setApiKey", provider: apiKeyProvider, apiKey: apiKeyInput.trim() });
+      setApiKeySet(true);
+      setApiKeyInput(""); // Clear from UI state for security
+    }
+  };
+
+  // Fetch slideshow and grimoire when game ends
+  useEffect(() => {
+    if (phase === "ended" && !hasFetchedSlideshow.current) {
+      hasFetchedSlideshow.current = true;
+      setSlideshowLoading(true);
+      setGrimoireLoading(true);
+
+      const partyHost = process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? "localhost:1999";
+      const protocol = partyHost.includes("localhost") ? "http" : "https";
+      // PartyKit normalizes room IDs to lowercase
+      const normalizedCode = code.toLowerCase();
+
+      // Fetch slideshow retelling
+      const slideshowUrl = `${protocol}://${partyHost}/parties/main/${normalizedCode}?slideshow=true`;
+      fetch(slideshowUrl)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to fetch slideshow");
+          return res.json();
+        })
+        .then((data) => {
+          setSlideshow(data);
+          setSlideshowLoading(false);
+        })
+        .catch((err) => {
+          console.error("[SLIDESHOW] Error:", err);
+          setSlideshowLoading(false);
+        });
+
+      // Fetch grimoire
+      const grimoireUrl = `${protocol}://${partyHost}/parties/main/${normalizedCode}?grimoire=true`;
+      fetch(grimoireUrl)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to fetch grimoire");
+          return res.json();
+        })
+        .then((data) => {
+          setGrimoire(data);
+          setGrimoireLoading(false);
+        })
+        .catch((err) => {
+          console.error("[GRIMOIRE] Error:", err);
+          setGrimoireLoading(false);
+        });
+    }
+  }, [phase, code]);
+  // Character selection state
+  const selectedCharacters = roomState?.selectedCharacters ?? [];
+  const handleToggleCharacter = useCallback(
+    (character: Character) => {
+      const newSelection = selectedCharacters.includes(character)
+        ? selectedCharacters.filter((c) => c !== character)
+        : [...selectedCharacters, character];
+      send({ type: "host:setCharacters", characters: newSelection });
+    },
+    [selectedCharacters, send]
+  );
+
   const handleSetSeating = useCallback(
     (seatingOrder: string[]) => send({ type: "host:setSeating", seatingOrder }),
     [send]
@@ -134,27 +307,138 @@ export default function HostRoom() {
             disabled={!canStart}
             className="w-full bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-4 px-8 rounded-lg text-xl transition-colors"
           >
-            {canStart ? "Start Game" : `Need ${5 - players.length} more players`}
+            {canStart ? "Continue to Setup" : `Need ${5 - players.length} more players`}
           </button>
 
           {!isConnected && (
             <p className="text-yellow-500 text-center mt-4">Connecting...</p>
           )}
+
+          {/* Optional AI API Key Configuration */}
+          <div className="mt-6 border-t border-gray-700 pt-4">
+            <button
+              onClick={() => setShowApiKeyConfig(!showApiKeyConfig)}
+              className="w-full text-left text-sm text-gray-500 hover:text-gray-400 flex items-center justify-between"
+            >
+              <span>AI Storyteller (optional)</span>
+              <span className="text-xs">{showApiKeyConfig ? "▲" : "▼"}</span>
+            </button>
+
+            {showApiKeyConfig && (
+              <div className="mt-3 space-y-3">
+                <p className="text-xs text-gray-500">
+                  Provide an API key for AI-generated game retelling at the end.
+                </p>
+
+                {apiKeySet ? (
+                  <div className="bg-green-900/30 border border-green-700 rounded-lg px-4 py-3">
+                    <p className="text-green-400 text-sm">
+                      ✓ API key configured ({apiKeyProvider})
+                    </p>
+                    <button
+                      onClick={() => { setApiKeySet(false); setApiKeyInput(""); }}
+                      className="text-xs text-gray-500 hover:text-gray-400 mt-1"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setApiKeyProvider("anthropic")}
+                        className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                          apiKeyProvider === "anthropic"
+                            ? "bg-orange-700 text-white"
+                            : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+                        }`}
+                      >
+                        Anthropic
+                      </button>
+                      <button
+                        onClick={() => setApiKeyProvider("openai")}
+                        className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                          apiKeyProvider === "openai"
+                            ? "bg-green-700 text-white"
+                            : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+                        }`}
+                      >
+                        OpenAI
+                      </button>
+                    </div>
+
+                    <input
+                      type="password"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                      placeholder={apiKeyProvider === "anthropic" ? "sk-ant-..." : "sk-..."}
+                      className="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-gray-500 focus:outline-none"
+                    />
+
+                    <button
+                      onClick={handleSetApiKey}
+                      disabled={!apiKeyInput.trim()}
+                      className="w-full bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg text-sm transition-colors"
+                    >
+                      Save API Key
+                    </button>
+
+                    <p className="text-xs text-gray-600">
+                      Your key is sent securely and stored only in server memory.
+                      Never logged or persisted.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </main>
     );
   }
 
-  // ─── Setup phase: arrange seating ───
+  // ─── Setup phase ───
   if (phase === "setup") {
+    const setupComplete = roomState?.setupComplete ?? false;
+
+    if (!setupComplete) {
+      // Step 1: Host selects characters and arranges seating
+      return (
+        <main className="flex min-h-screen flex-col items-center p-8">
+          <CircularSeating
+            players={players}
+            seatingOrder={seatingOrder}
+            selectedCharacters={selectedCharacters}
+            onReorder={handleSetSeating}
+            onToggleCharacter={handleToggleCharacter}
+            onConfirm={handleConfirmSeating}
+          />
+        </main>
+      );
+    }
+
+    // Step 2: Review screen — characters are assigned, host can start Night 1
     return (
-      <main className="flex min-h-screen flex-col items-center p-8">
-        <CircularSeating
-          players={players}
-          seatingOrder={seatingOrder}
-          onReorder={handleSetSeating}
-          onConfirm={handleConfirmSeating}
-        />
+      <main className="flex min-h-screen flex-col items-center justify-center p-8">
+        <div className="w-full max-w-2xl text-center">
+          <h1 className="text-4xl font-bold mb-3">Review your characters</h1>
+          <p className="text-gray-400 text-lg mb-12">
+            Characters have been assigned, familiarize yourself with your roles...
+          </p>
+
+          <div className="flex flex-col items-center gap-4">
+            <button
+              onClick={() => send({ type: "host:beginNight" })}
+              className="w-full max-w-xs bg-red-700 hover:bg-red-600 text-white font-bold py-4 px-8 rounded-lg text-xl transition-colors"
+            >
+              Start Game
+            </button>
+            <p className="text-xs text-gray-500 text-center max-w-md">
+              Players can see their own characters on their devices. When you click <span className="font-semibold">Start Game</span>,
+              Night 1 will begin.
+            </p>
+          </div>
+        </div>
       </main>
     );
   }
@@ -189,6 +473,7 @@ export default function HostRoom() {
     const showAnnouncement = !announcementDismissed && lastAnnouncedRound.current !== round;
     return (
       <main className="flex min-h-screen flex-col items-center p-6 bg-gray-950 text-white">
+        <AnnouncementToast announcements={toasts} onDismiss={dismissToast} />
         {showAnnouncement && (
           <DawnAnnouncement
             deaths={deaths}
@@ -220,6 +505,7 @@ export default function HostRoom() {
   if (phase === "nomination") {
     return (
       <main className="flex min-h-screen flex-col items-center p-6 bg-gray-950 text-white">
+        <AnnouncementToast announcements={toasts} onDismiss={dismissToast} />
         <HostNominationView
           round={round}
           timerEndsAt={roomState?.dayTimerEndsAt}
@@ -238,6 +524,7 @@ export default function HostRoom() {
   if (phase === "accusation" && roomState?.pendingNomination) {
     return (
       <main className="flex min-h-screen flex-col items-center p-6 bg-gray-950 text-white">
+        <AnnouncementToast announcements={toasts} onDismiss={dismissToast} />
         <HostAccusationView
           nomination={roomState.pendingNomination}
           timerEndsAt={roomState.accusationTimerEndsAt}
@@ -256,6 +543,7 @@ export default function HostRoom() {
   if (phase === "voting" && activeVote) {
     return (
       <main className="flex min-h-screen flex-col items-center p-6 bg-gray-950 text-white">
+        <AnnouncementToast announcements={toasts} onDismiss={dismissToast} />
         <HostVotingView
           vote={activeVote}
           players={players}
@@ -269,34 +557,40 @@ export default function HostRoom() {
 
   // ─── Game over ───
   if (phase === "ended") {
-    const winner = roomState?.winner;
-    const winReason = roomState?.winReason ?? "";
-    const isEvilWin = winner === "evil";
+    // Show slideshow if available
+    if (slideshow && slideshow.slides.length > 0) {
+      return (
+        <SlideshowRetelling
+          slides={slideshow.slides}
+          winner={slideshow.winner}
+          winReason={slideshow.winReason}
+          aiNarrative={slideshow.aiNarrative}
+          grimoire={grimoire}
+        />
+      );
+    }
+
+    // Fallback to loading state
+    if (slideshowLoading) {
+      return (
+        <main className="flex min-h-screen flex-col items-center justify-center p-8 bg-gradient-to-b from-gray-900 to-black">
+          <div className="text-center">
+            <div className="relative inline-block mb-4">
+              <div className="w-16 h-16 rounded-full border-2 border-gray-700 border-t-gray-400 animate-spin" />
+            </div>
+            <p className="text-gray-400 text-lg">Loading game retelling...</p>
+          </div>
+        </main>
+      );
+    }
+
+    // If no slideshow available, show basic game over
     return (
-      <main
-        className="flex min-h-screen flex-col items-center justify-center p-8 text-center"
-        style={{
-          background: isEvilWin
-            ? "linear-gradient(to bottom, #0f0000 0%, #1a0000 100%)"
-            : "linear-gradient(to bottom, #000a0f 0%, #00101a 100%)",
-        }}
-      >
-        <div
-          className="text-7xl mb-6"
-          style={{ animation: "duskFadeIn 1.5s ease forwards" }}
-        >
-          {isEvilWin ? "😈" : "😇"}
-        </div>
-        <h1
-          className={`text-5xl font-extrabold mb-4 ${isEvilWin ? "text-red-400" : "text-blue-300"}`}
-          style={{ animation: "duskFadeIn 1.5s ease forwards" }}
-        >
-          {isEvilWin ? "Evil Wins!" : "Good Wins!"}
+      <main className="flex min-h-screen flex-col items-center justify-center p-8 bg-gradient-to-b from-gray-900 to-black">
+        <h1 className="text-6xl font-extrabold mb-4">
+          {roomState?.winner === "evil" ? "😈 Evil Wins!" : "😇 Good Wins!"}
         </h1>
-        {winReason && (
-          <p className="text-gray-400 text-lg max-w-md mt-2">{winReason}</p>
-        )}
-        <div className="mt-10 text-gray-600 text-sm">Game Over</div>
+        <p className="text-gray-400 text-xl">{roomState?.winReason}</p>
       </main>
     );
   }

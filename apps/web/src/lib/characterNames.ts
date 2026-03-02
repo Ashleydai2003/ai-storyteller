@@ -1,5 +1,15 @@
 import type { Character, CharacterType } from "@ai-botc/game-logic";
 
+/**
+ * Path to character token image.
+ * Returns undefined for characters without tokens (e.g., Drunk who sees another character).
+ */
+export function getCharacterTokenPath(character: Character): string | undefined {
+  // Map snake_case character IDs to kebab-case filenames
+  const filename = character.replace(/_/g, "-");
+  return `/character_tokens/${filename}.jpg`;
+}
+
 // Human-friendly display names
 export const CHARACTER_DISPLAY_NAMES: Record<Character, string> = {
   washerwoman: "Washerwoman",

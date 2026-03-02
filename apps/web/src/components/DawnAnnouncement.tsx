@@ -95,17 +95,10 @@ export default function DawnAnnouncement({
   const nobodyDied = deaths.length === 0;
   const multiDead = deaths.length > 1;
 
-  // Compose narrative strings
   const openingLine =
     round === 1
       ? "As the sun rises on the first day…"
       : "Last night, while the village slept…";
-
-  const deathLine = nobodyDied
-    ? "No one was found dead."
-    : multiDead
-    ? `${deaths.slice(0, -1).join(", ")} and ${deaths[deaths.length - 1]} were found dead.`
-    : `${deaths[0]} was found dead.`;
 
   return (
     <div
@@ -146,7 +139,7 @@ export default function DawnAnnouncement({
         ) : (
           <>
             <p className="text-gray-400 mb-3 text-sm uppercase tracking-widest">
-              {multiDead ? "The dead" : "The dead"}
+              The dead
             </p>
             <div className="flex flex-col items-center gap-2 mb-4">
               {deaths.map((name) => (

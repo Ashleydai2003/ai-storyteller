@@ -20,6 +20,7 @@ import type {
   NightAction,
 } from "@ai-botc/game-logic";
 import { FIRST_NIGHT_ORDER, OTHER_NIGHT_ORDER } from "@ai-botc/game-logic";
+import type { StoryLogger } from "./storyLogger";
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Context interface — provided by RoomServer at call-time
@@ -30,10 +31,17 @@ export interface NightContext {
   state: RoomState;
   /** Server-only state (bluffs, red herring, pending kills, etc.) */
   serverGameState: ServerGameState;
+  /** Story logger for clean narrative events. */
+  storyLogger: StoryLogger;
   /** Send a WebSocket message to a player by their stable token. */
   sendToToken(token: string, message: ServerMessage): void;
-  /** Append to the persistent game log. */
+  /** Append to the persistent game log (debug). */
   addLog(event: string, detail: Record<string, unknown>): Promise<void>;
+  /**
+   * Log to BOTH debug log and story log.
+   * Use this for player actions and information shown.
+   */
+  logBoth(debugEvent: string, debugDetail: Record<string, unknown>, storyDetail: Record<string, unknown>): Promise<void>;
   /** Persist RoomState to durable storage. */
   persistState(): Promise<void>;
   /** Persist ServerGameState to durable storage. */
@@ -60,7 +68,10 @@ export function shuffleArray<T>(arr: T[]): T[] {
   return shuffled;
 }
 
-/** Is the player evil (minion or demon) by actual registration? */
+/**
+ * Is the player evil by registration?
+ * Uses characterRegistration which is set at game start and accounts for Recluse.
+ */
 export function isPlayerEvil(player: Player): boolean {
   return (
     player.characterRegistration === "minion" ||
@@ -119,134 +130,88 @@ export function getAliveNeighbors(
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Night order — pre-computed once at game start, used every night
+// Night order — simple character-based system
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /**
- * Build the first-night and other-nights wake orders from the
- * assigned player list.  Called once after character assignment
- * and stored in ServerGameState.
- *
- * The canonical order comes from FIRST_NIGHT_ORDER / OTHER_NIGHT_ORDER.
- * Only characters actually in play get an entry.
+ * Get the night order for the current night.
+ * Returns a simple array of handler strings (character names + special handlers).
+ * The handlers are resolved dynamically at execution time.
  */
-export function buildNightOrders(players: Player[]): {
-  firstNightOrder: NightStep[];
-  otherNightsOrder: NightStep[];
-} {
-  const makeStep = (handler: string, p: Player): NightStep => ({
-    handler,
-    playerId: p.id,
-    playerName: p.name,
-    character: p.character!,
-  });
-
-  const resolve = (
-    order: readonly string[],
-    players: Player[]
-  ): NightStep[] => {
-    const steps: NightStep[] = [];
-    for (const handler of order) {
-      switch (handler) {
-        case "minion_info":
-          // One entry per minion
-          players
-            .filter((p) => p.characterRegistration === "minion")
-            .forEach((p) => steps.push(makeStep("minion_info", p)));
-          break;
-        case "demon_info":
-          // One entry per demon
-          players
-            .filter((p) => p.characterRegistration === "demon")
-            .forEach((p) => steps.push(makeStep("demon_info", p)));
-          break;
-        case "imp":
-          // Resolved dynamically at night-time (handles starpass)
-          // Store a placeholder pointing to the current demon
-          players
-            .filter((p) => p.characterRegistration === "demon")
-            .forEach((p) => steps.push(makeStep("imp", p)));
-          break;
-        default: {
-          // Standard: find by character name
-          const p = players.find((pl) => pl.character === handler);
-          if (p) steps.push(makeStep(handler, p));
-        }
-      }
-    }
-    return steps;
-  };
-
-  return {
-    firstNightOrder: resolve(FIRST_NIGHT_ORDER, players),
-    otherNightsOrder: resolve(OTHER_NIGHT_ORDER, players),
-  };
+export function getNightOrder(nightNumber: number): readonly string[] {
+  return nightNumber === 1 ? FIRST_NIGHT_ORDER : OTHER_NIGHT_ORDER;
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Night step generation — filter the pre-computed order for this night
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 /**
- * Generate the concrete NightStep list for the current night.
- * Filters the pre-computed order for alive players and applies
- * any conditional rules (e.g. minion_info only with 7+ players).
+ * Resolve a handler to the player(s) who should wake for it.
+ * Returns null if the handler should be skipped this night.
+ * Returns an array because minion_info/demon_info can apply to multiple players.
  */
-export function generateNightSteps(
+export function resolveHandler(
+  handler: string,
   state: RoomState,
   serverGameState: ServerGameState
-): NightStep[] {
+): Player[] | null {
   const nightNumber = state.roundNumber ?? 1;
-  const template =
-    nightNumber === 1
-      ? serverGameState.firstNightOrder
-      : serverGameState.otherNightsOrder;
 
-  return template.filter((entry) => {
-    // Conditional: minion_info and demon_info only with 7+ players
-    if (
-      (entry.handler === "minion_info" || entry.handler === "demon_info") &&
-      state.players.length < 7
-    ) {
-      return false;
-    }
+  // Skip minion/demon info for < 7 players
+  if (
+    (handler === "minion_info" || handler === "demon_info") &&
+    state.players.length < 7
+  ) {
+    return null;
+  }
 
-    // Undertaker: only wakes on Night 2+ AND only if an execution happened today
-    if (entry.handler === "undertaker") {
-      if (nightNumber === 1) return false;
-      if (!serverGameState.lastExecutedCharacter) return false;
-    }
+  // Minion info: all alive minions (by characterType, not registration)
+  if (handler === "minion_info") {
+    const minions = state.players.filter(
+      (p) => p.characterType === "minion" && p.alive
+    );
+    return minions.length > 0 ? minions : null;
+  }
 
-    // For "imp" handler, resolve the current demon (handles starpass)
-    if (entry.handler === "imp") {
-      return state.players.some(
-        (p) => p.characterRegistration === "demon" && p.alive
-      );
-    }
+  // Demon info: all alive demons (by characterType, not registration)
+  if (handler === "demon_info") {
+    const demons = state.players.filter(
+      (p) => p.characterType === "demon" && p.alive
+    );
+    return demons.length > 0 ? demons : null;
+  }
 
-    // Default: the player in the template must still be alive
-    const player = state.players.find((p) => p.id === entry.playerId);
-    return player?.alive ?? false;
-  }).map((entry) => {
-    // For "imp", resolve to whoever the current demon is
-    if (entry.handler === "imp") {
-      const demon = state.players.find(
-        (p) => p.characterRegistration === "demon" && p.alive
-      )!;
-      return {
-        handler: entry.handler,
-        playerId: demon.id,
-        playerName: demon.name,
-        character: demon.character!,
-      };
+  // Imp: whoever's character is imp and is alive (handles starpass)
+  if (handler === "imp") {
+    const demon = state.players.find(
+      (p) => p.character === "imp" && p.alive
+    );
+    return demon ? [demon] : null;
+  }
+
+  // Ravenkeeper: only if they died tonight
+  if (handler === "ravenkeeper") {
+    const ravenkeepers = state.players.filter(
+      (p) =>
+        p.character === "ravenkeeper" &&
+        serverGameState.nightDeaths?.includes(p.name)
+    );
+    return ravenkeepers.length > 0 ? ravenkeepers : null;
+  }
+
+  // Undertaker: only on Night 2+ AND only if someone was executed
+  if (handler === "undertaker") {
+    if (nightNumber === 1 || !serverGameState.lastExecutedCharacter) {
+      return null;
     }
-    // For all others, refresh the player name (may have changed on reconnect)
-    const player = state.players.find((p) => p.id === entry.playerId);
-    return {
-      ...entry,
-      playerName: player?.name ?? entry.playerName,
-    };
-  });
+    const undertaker = state.players.find(
+      (p) => p.character === "undertaker" && p.alive
+    );
+    return undertaker ? [undertaker] : null;
+  }
+
+  // Default: find alive player with this character
+  const player = state.players.find(
+    (p) => p.character === handler && p.alive
+  );
+  return player ? [player] : null;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -260,10 +225,18 @@ export function generateNightSteps(
  */
 export async function dispatchNightStep(
   ctx: NightContext,
-  step: NightStep,
+  handler: string,
   player: Player
 ): Promise<boolean> {
-  switch (step.handler) {
+  // Create a minimal NightStep for backwards compatibility with existing handlers
+  const step = {
+    handler,
+    playerId: player.id,
+    playerName: player.name,
+    character: player.character!,
+  };
+
+  switch (handler) {
     case "minion_info":
       await nightStep_minionInfo(ctx, step, player);
       return true;
@@ -306,8 +279,11 @@ export async function dispatchNightStep(
     case "imp":
       await nightStep_imp(ctx, step, player);
       return true;
+    case "ravenkeeper":
+      await nightStep_ravenkeeper(ctx, step, player);
+      return true;
     default:
-      console.log(`[NIGHT] Unknown handler "${step.handler}" — auto-skipping`);
+      console.log(`[NIGHT] Unknown handler "${handler}" — auto-skipping`);
       return false;
   }
 }
@@ -315,11 +291,19 @@ export async function dispatchNightStep(
 /** Dispatch to the correct resolver when a player submits a night action. */
 export async function dispatchNightAction(
   ctx: NightContext,
-  step: NightStep,
+  handler: string,
   player: Player,
   action: NightAction
 ): Promise<void> {
-  switch (step.handler) {
+  // Create a minimal NightStep for backwards compatibility with existing handlers
+  const step = {
+    handler,
+    playerId: player.id,
+    playerName: player.name,
+    character: player.character!,
+  };
+
+  switch (handler) {
     case "poisoner":
       return resolveNight_poisoner(ctx, step, player, action);
     case "fortune_teller":
@@ -330,9 +314,11 @@ export async function dispatchNightAction(
       return resolveNight_monk(ctx, step, player, action);
     case "imp":
       return resolveNight_imp(ctx, step, player, action);
+    case "ravenkeeper":
+      return resolveNight_ravenkeeper(ctx, step, player, action);
     default:
       // Shouldn't happen — fall through to sleep
-      await ctx.sleepAndAdvance(step.playerId);
+      await ctx.sleepAndAdvance(player.id);
   }
 }
 
@@ -346,11 +332,12 @@ async function nightStep_minionInfo(
   step: NightStep,
   player: Player
 ) {
+  // Use characterType to find actual demons (not Recluse who registers as demon)
   const demon = ctx.state.players.find(
-    (p) => p.characterRegistration === "demon"
+    (p) => p.characterType === "demon"
   );
   const otherMinions = ctx.state.players.filter(
-    (p) => p.characterRegistration === "minion" && p.id !== step.playerId
+    (p) => p.characterType === "minion" && p.id !== step.playerId
   );
 
   const demonName = demon?.name ?? "unknown";
@@ -371,10 +358,11 @@ async function nightStep_minionInfo(
     },
   });
 
-  await ctx.addLog("night:minionInfo", {
+
+  await ctx.storyLogger.addEvent("night:minionInfo", {
     minionName: player.name,
     minionCharacter: player.character,
-    demonName: demon?.name,
+    demonName: demon?.name ?? "unknown",
     otherMinions: otherMinions.map((m) => m.name),
   });
 }
@@ -385,8 +373,9 @@ async function nightStep_demonInfo(
   step: NightStep,
   player: Player
 ) {
+  // Use characterType to find actual minions (not Recluse who registers as minion)
   const minions = ctx.state.players.filter(
-    (p) => p.characterRegistration === "minion"
+    (p) => p.characterType === "minion"
   );
   const minionNames = minions.map((m) => m.name).join(", ");
   const instruction = `Your minion${minions.length > 1 ? "s are" : " is"}: ${minionNames}.`;
@@ -400,7 +389,8 @@ async function nightStep_demonInfo(
     bluffs: ctx.serverGameState.demonBluffs,
   });
 
-  await ctx.addLog("night:demonInfo", {
+
+  await ctx.storyLogger.addEvent("night:demonInfo", {
     demonName: player.name,
     minions: minions.map((m) => ({ name: m.name, character: m.character })),
     bluffs: ctx.serverGameState.demonBluffs ?? [],
@@ -427,11 +417,6 @@ async function nightStep_poisoner(
     },
   });
   await ctx.setStepPhase("awaiting_action");
-  await ctx.addLog("night:poisonerWake", {
-    playerName: player.name,
-    instruction: "Choose a player to poison.",
-    options: idsToNames(options, ctx.state.players),
-  });
 }
 
 /** Washerwoman: "One of [A] or [B] is the [Townsfolk]". */
@@ -476,6 +461,13 @@ async function nightStep_washerwoman(
       instruction = "No Townsfolk could be identified.";
     } else {
       const correct = townsfolk[Math.floor(Math.random() * townsfolk.length)];
+      // For Recluse registering as townsfolk, show a random townsfolk character
+      const displayChar: Character =
+        correct.trueCharacter === "recluse"
+          ? (["washerwoman", "librarian", "investigator", "chef", "empath",
+              "fortune_teller", "undertaker", "monk", "ravenkeeper", "virgin",
+              "slayer", "soldier", "mayor"][Math.floor(Math.random() * 13)] as Character)
+          : correct.trueCharacter!;
       const wrongCandidates = ctx.state.players.filter(
         (p) => p.id !== step.playerId && p.id !== correct.id
       );
@@ -483,7 +475,12 @@ async function nightStep_washerwoman(
         wrongCandidates[Math.floor(Math.random() * wrongCandidates.length)];
       const [a, b] =
         Math.random() < 0.5 ? [correct, wrong] : [wrong, correct];
-      instruction = `One of ${a.name} or ${b.name} is the ${charName(correct.character!)}.`;
+      instruction = `One of ${a.name} or ${b.name} is the ${charName(displayChar)}.`;
+
+      // Track reminder tokens for Spy grimoire
+      ctx.serverGameState.washerwomanTownsfolk = correct.id;
+      ctx.serverGameState.washerwomanWrong = wrong.id;
+      await ctx.persistServerState();
     }
   }
 
@@ -491,10 +488,12 @@ async function nightStep_washerwoman(
     type: "player:wake",
     prompt: { character: player.character!, promptType: "info", instruction },
   });
-  await ctx.addLog("night:washerwoman", {
+
+  await ctx.storyLogger.logPlayerInfo({
     playerName: player.name,
-    instruction,
-    isDrunkOrPoisoned,
+    character: "washerwoman",
+    states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+    infoShown: instruction,
   });
 }
 
@@ -526,11 +525,18 @@ async function nightStep_librarian(
       instruction = "There are no Outsiders in play.";
     } else {
       const correct = outsiders[Math.floor(Math.random() * outsiders.length)];
-      // The Drunk's .character is the townsfolk they think they are,
-      // but the Librarian should see "Drunk" — use the true outsider identity.
-      const displayChar: Character = correct.states.includes("drunk")
-        ? "drunk"
-        : correct.character!;
+      // Determine display character:
+      // - Drunk: show "drunk" (their true character)
+      // - Recluse: show random outsider (butler, drunk, saint)
+      // - Others: show their true character
+      let displayChar: Character;
+      if (correct.states.includes("drunk")) {
+        displayChar = "drunk";
+      } else if (correct.trueCharacter === "recluse") {
+        displayChar = (["butler", "drunk", "saint"][Math.floor(Math.random() * 3)] as Character);
+      } else {
+        displayChar = correct.trueCharacter!;
+      }
       const wrongCandidates = ctx.state.players.filter(
         (p) => p.id !== step.playerId && p.id !== correct.id
       );
@@ -539,6 +545,11 @@ async function nightStep_librarian(
       const [a, b] =
         Math.random() < 0.5 ? [correct, wrong] : [wrong, correct];
       instruction = `One of ${a.name} or ${b.name} is the ${charName(displayChar)}.`;
+
+      // Track reminder tokens for Spy grimoire
+      ctx.serverGameState.librarianOutsider = correct.id;
+      ctx.serverGameState.librarianWrong = wrong.id;
+      await ctx.persistServerState();
     }
   }
 
@@ -546,10 +557,12 @@ async function nightStep_librarian(
     type: "player:wake",
     prompt: { character: player.character!, promptType: "info", instruction },
   });
-  await ctx.addLog("night:librarian", {
+
+  await ctx.storyLogger.logPlayerInfo({
     playerName: player.name,
-    instruction,
-    isDrunkOrPoisoned,
+    character: "librarian",
+    states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+    infoShown: instruction,
   });
 }
 
@@ -576,6 +589,7 @@ async function nightStep_investigator(
     const rc = allMinions[Math.floor(Math.random() * allMinions.length)];
     instruction = `One of ${others[0]?.name} or ${others[1]?.name} is the ${charName(rc)}.`;
   } else {
+    // Find players who register as minion (Recluse may register as minion)
     const minions = ctx.state.players.filter(
       (p) =>
         p.id !== step.playerId &&
@@ -586,6 +600,13 @@ async function nightStep_investigator(
       instruction = "No Minions could be identified.";
     } else {
       const correct = minions[Math.floor(Math.random() * minions.length)];
+      // For display: if Recluse registering as minion, show a random minion character
+      const displayChar: Character =
+        correct.trueCharacter === "recluse"
+          ? (["poisoner", "spy", "scarlet_woman", "baron"][
+              Math.floor(Math.random() * 4)
+            ] as Character)
+          : correct.trueCharacter!;
       const wrongCandidates = ctx.state.players.filter(
         (p) =>
           p.id !== step.playerId && p.id !== correct.id && !isPlayerEvil(p)
@@ -600,7 +621,12 @@ async function nightStep_investigator(
             )[0];
       const [a, b] =
         Math.random() < 0.5 ? [correct, wrong] : [wrong, correct];
-      instruction = `One of ${a.name} or ${b.name} is the ${charName(correct.character!)}.`;
+      instruction = `One of ${a.name} or ${b.name} is the ${charName(displayChar)}.`;
+
+      // Track reminder tokens for Spy grimoire
+      ctx.serverGameState.investigatorMinion = correct.id;
+      ctx.serverGameState.investigatorWrong = wrong.id;
+      await ctx.persistServerState();
     }
   }
 
@@ -608,10 +634,12 @@ async function nightStep_investigator(
     type: "player:wake",
     prompt: { character: player.character!, promptType: "info", instruction },
   });
-  await ctx.addLog("night:investigator", {
+
+  await ctx.storyLogger.logPlayerInfo({
     playerName: player.name,
-    instruction,
-    isDrunkOrPoisoned,
+    character: "investigator",
+    states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+    infoShown: instruction,
   });
 }
 
@@ -635,6 +663,7 @@ async function nightStep_chef(
       const b = ctx.state.players.find(
         (p) => p.id === seating[(i + 1) % seating.length]
       );
+      // isPlayerEvil uses characterRegistration (accounts for Recluse)
       if (a && b && isPlayerEvil(a) && isPlayerEvil(b)) {
         count++;
       }
@@ -650,11 +679,12 @@ async function nightStep_chef(
     type: "player:wake",
     prompt: { character: player.character!, promptType: "info", instruction },
   });
-  await ctx.addLog("night:chef", {
+
+  await ctx.storyLogger.logPlayerInfo({
     playerName: player.name,
-    instruction,
-    count,
-    isDrunkOrPoisoned,
+    character: "chef",
+    states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+    infoShown: instruction,
   });
 }
 
@@ -676,6 +706,7 @@ async function nightStep_empath(
       ctx.state.players,
       ctx.state.seatingOrder ?? []
     );
+    // isPlayerEvil uses characterRegistration (Recluse registers as minion or demon at game start)
     count = neighbors.filter((n) => isPlayerEvil(n)).length;
   }
 
@@ -688,11 +719,12 @@ async function nightStep_empath(
     type: "player:wake",
     prompt: { character: player.character!, promptType: "info", instruction },
   });
-  await ctx.addLog("night:empath", {
+
+  await ctx.storyLogger.logPlayerInfo({
     playerName: player.name,
-    instruction,
-    count,
-    isDrunkOrPoisoned,
+    character: "empath",
+    states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+    infoShown: instruction,
   });
 }
 
@@ -719,7 +751,19 @@ async function nightStep_undertaker(
   } else {
     const executedChar = ctx.serverGameState.lastExecutedCharacter;
     if (executedChar) {
-      instruction = `The executed player was the ${charName(executedChar)}.`;
+      // For Recluse, show a random character matching their registration
+      let displayChar: Character = executedChar;
+      if (executedChar === "recluse") {
+        const registration = ctx.serverGameState.lastExecutedRegistration;
+        if (registration === "outsider") {
+          displayChar = (["butler", "drunk", "saint"][Math.floor(Math.random() * 3)] as Character);
+        } else if (registration === "minion") {
+          displayChar = (["poisoner", "spy", "scarlet_woman", "baron"][Math.floor(Math.random() * 4)] as Character);
+        } else if (registration === "demon") {
+          displayChar = "imp";
+        }
+      }
+      instruction = `The executed player was the ${charName(displayChar)}.`;
     } else {
       instruction = "No one was executed today.";
     }
@@ -729,10 +773,12 @@ async function nightStep_undertaker(
     type: "player:wake",
     prompt: { character: player.character!, promptType: "info", instruction },
   });
-  await ctx.addLog("night:undertaker", {
+
+  await ctx.storyLogger.logPlayerInfo({
     playerName: player.name,
-    instruction,
-    isDrunkOrPoisoned,
+    character: "undertaker",
+    states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+    infoShown: instruction,
   });
 }
 
@@ -756,11 +802,6 @@ async function nightStep_fortuneTeller(
     },
   });
   await ctx.setStepPhase("awaiting_action");
-  await ctx.addLog("night:fortuneTellerWake", {
-    playerName: player.name,
-    instruction: "Choose 2 players to divine.",
-    options: idsToNames(options, ctx.state.players),
-  });
 }
 
 /** Butler: choose a master (may only vote when they vote). */
@@ -786,11 +827,6 @@ async function nightStep_butler(
     },
   });
   await ctx.setStepPhase("awaiting_action");
-  await ctx.addLog("night:butlerWake", {
-    playerName: player.name,
-    instruction: "Choose a player to be your master.",
-    options: idsToNames(options, ctx.state.players),
-  });
 }
 
 /** Spy: sees the entire grimoire. */
@@ -811,27 +847,11 @@ async function nightStep_spy(
         instruction: "Your ability is not working tonight.",
       },
     });
-    await ctx.addLog("night:spy", {
-      playerName: player.name,
-      instruction: "Your ability is not working tonight.",
-      isDrunkOrPoisoned: true,
-    });
     return;
   }
 
   // Build structured grimoire entries in seating order
-  const seating = ctx.state.seatingOrder ?? ctx.state.players.map((p) => p.id);
-  const grimoire: GrimoireEntry[] = seating
-    .map((id) => ctx.state.players.find((p) => p.id === id))
-    .filter((p): p is Player => p !== undefined)
-    .map((p) => ({
-      playerId: p.id,
-      playerName: p.name,
-      character: p.character!,
-      characterType: p.characterRegistration ?? p.characterType!,
-      states: [...p.states],
-      alive: p.alive,
-    }));
+  const grimoire = buildSpyGrimoire(ctx.state, ctx.serverGameState);
 
   ctx.sendToToken(step.playerId, {
     type: "player:wake",
@@ -847,10 +867,15 @@ async function nightStep_spy(
     (e) =>
       `• ${e.playerName}: ${charName(e.character)} (${e.characterType})${e.states.length ? " [" + e.states.join(", ") + "]" : ""}`
   );
-  await ctx.addLog("night:spy", {
+
+  await ctx.storyLogger.addEvent("night:spyGrimoire", {
     playerName: player.name,
-    instruction: "Grimoire:\n" + textLines.join("\n"),
-    isDrunkOrPoisoned: false,
+    grimoire: grimoire.map(e => ({
+      playerName: e.playerName,
+      character: e.character,
+      alive: e.alive,
+      states: e.states,
+    })),
   });
 }
 
@@ -876,11 +901,6 @@ async function nightStep_monk(
     },
   });
   await ctx.setStepPhase("awaiting_action");
-  await ctx.addLog("night:monkWake", {
-    playerName: player.name,
-    instruction: "Choose a player to protect from the Demon tonight.",
-    options: idsToNames(options, ctx.state.players),
-  });
 }
 
 /** Imp: choose someone to kill tonight (may choose self → starpass). */
@@ -902,11 +922,28 @@ async function nightStep_imp(
     },
   });
   await ctx.setStepPhase("awaiting_action");
-  await ctx.addLog("night:impWake", {
-    playerName: player.name,
-    instruction: "Choose a player to kill tonight.",
-    options: idsToNames(options, ctx.state.players),
+}
+
+/** Ravenkeeper: if killed tonight, choose a player to learn their character. */
+async function nightStep_ravenkeeper(
+  ctx: NightContext,
+  step: NightStep,
+  player: Player
+) {
+  // Ravenkeeper can choose any player (alive or dead)
+  const options = ctx.state.players.map((p) => p.id);
+
+  ctx.sendToToken(step.playerId, {
+    type: "player:wake",
+    prompt: {
+      character: player.character!,
+      promptType: "choose",
+      instruction: "You died tonight. Choose a player to learn their character.",
+      options,
+      selectCount: 1,
+    },
   });
+  await ctx.setStepPhase("awaiting_action");
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -934,11 +971,9 @@ async function resolveNight_poisoner(
       target.states.push("poisoned");
     }
     await ctx.persistState();
-    await ctx.addLog("night:poisonerAction", {
-      playerName: player.name,
-      targetName: target?.name ?? "unknown",
-      effective,
-    });
+    if (target && effective) {
+      await ctx.storyLogger.logNightPoison(player.name, target.name);
+    }
   }
   await ctx.sleepAndAdvance(step.playerId);
 }
@@ -958,9 +993,10 @@ async function resolveNight_fortuneTeller(
     if (isDrunkOrPoisoned) {
       result = Math.random() < 0.5;
     } else {
+      // Check characterRegistration (Recluse may register as demon at game start)
       const isDemon = action.targetIds.some((id) => {
         const t = ctx.state.players.find((p) => p.id === id);
-        return t?.characterRegistration === "demon";
+        return t && t.characterRegistration === "demon";
       });
       const isRedHerring = action.targetIds.includes(
         ctx.serverGameState.fortuneTellerRedHerring ?? ""
@@ -985,13 +1021,14 @@ async function resolveNight_fortuneTeller(
     const resultInstruction = result
       ? "Yes — one of them is the Demon."
       : "No — neither of them is the Demon.";
-    await ctx.addLog("night:fortuneTellerResult", {
+
+    await ctx.storyLogger.logPlayerInfo({
       playerName: player.name,
-      targets: idsToNames(action.targetIds, ctx.state.players),
-      result,
-      instruction: resultInstruction,
-      isDrunkOrPoisoned,
+      character: "fortune_teller",
+      states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+      infoShown: `${idsToNames(action.targetIds, ctx.state.players).join(" and ")}: ${resultInstruction}`,
     });
+
     // Don't advance — wait for player to acknowledge the result
     return;
   }
@@ -1014,9 +1051,12 @@ async function resolveNight_butler(
     }
     ctx.serverGameState.butlerMasters[step.playerId] = action.targetIds[0];
     await ctx.persistServerState();
-    await ctx.addLog("night:butlerAction", {
-      butlerName: player.name,
-      masterName: master?.name ?? "unknown",
+
+    await ctx.storyLogger.logPlayerAction({
+      playerName: player.name,
+      character: "butler",
+      states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+      action: `chose ${master?.name ?? "unknown"} as master`,
     });
   }
   await ctx.sleepAndAdvance(step.playerId);
@@ -1041,11 +1081,20 @@ async function resolveNight_monk(
       }
     }
     await ctx.persistState();
-    await ctx.addLog("night:monkAction", {
-      playerName: player.name,
-      targetName: target?.name ?? "unknown",
-      effective,
-    });
+    if (target) {
+      if (effective) {
+        await ctx.storyLogger.logNightProtection(player.name, target.name);
+      } else {
+        // Log when Monk tries to protect while drunk/poisoned
+        await ctx.storyLogger.logPlayerAction({
+          playerName: player.name,
+          character: "monk",
+          states: player.states.filter(s => s === "drunk" || s === "poisoned"),
+          action: `tried to protect ${target.name}`,
+          result: "failed (drunk/poisoned)"
+        });
+      }
+    }
   }
   await ctx.sleepAndAdvance(step.playerId);
 }
@@ -1058,7 +1107,7 @@ async function resolveNight_imp(
   action: NightAction
 ) {
   if (action.action === "none") {
-    await ctx.addLog("night:impSkip", { playerName: player.name });
+    // Imp chose no kill
     await ctx.sleepAndAdvance(step.playerId);
     return;
   }
@@ -1074,37 +1123,35 @@ async function resolveNight_imp(
       if (aliveMinions.length > 0) {
         const newImp =
           aliveMinions[Math.floor(Math.random() * aliveMinions.length)];
+        // Update minion to become Imp - change their character, type, and registration
         newImp.character = "imp";
         newImp.characterType = "demon";
         newImp.characterRegistration = "demon";
+
+        // Kill the old Imp
         player.alive = false;
         if (!ctx.serverGameState.nightDeaths) ctx.serverGameState.nightDeaths = [];
         ctx.serverGameState.nightDeaths.push(player.name);
         await ctx.persistState();
+
+        // Reveal new character to the new Imp
         ctx.sendToToken(newImp.id, {
           type: "character:reveal",
           character: "imp",
           characterType: "demon",
         });
-        await ctx.addLog("night:impStarpass", {
-          impName: player.name,
-          newImpName: newImp.name,
-        });
+
+        await ctx.storyLogger.logStarpass(player.name, newImp.name);
       } else {
         // No minions alive — Imp just dies
         player.alive = false;
         if (!ctx.serverGameState.nightDeaths) ctx.serverGameState.nightDeaths = [];
         ctx.serverGameState.nightDeaths.push(player.name);
         await ctx.persistState();
-        await ctx.addLog("night:impSuicide", { impName: player.name });
       }
     } else {
       // ── Normal kill — resolved immediately so later steps see the correct alive state ──
-      const target = ctx.state.players.find((p) => p.id === targetId);
-      await ctx.addLog("night:impKill", {
-        playerName: player.name,
-        targetName: target?.name ?? "unknown",
-      });
+      let target = ctx.state.players.find((p) => p.id === targetId);
 
       if (target && target.alive) {
         const isProtected = target.states.includes("protected");
@@ -1113,21 +1160,239 @@ async function resolveNight_imp(
           !target.states.includes("drunk") &&
           !target.states.includes("poisoned");
 
+        // Check for Mayor bounce
+        const isMayor =
+          target.character === "mayor" &&
+          !target.states.includes("drunk") &&
+          !target.states.includes("poisoned");
+
         if (isProtected || isSoldier) {
-          await ctx.addLog("night:killPrevented", {
+          await ctx.storyLogger.logNightKill({
+            killerName: player.name,
             targetName: target.name,
-            reason: isProtected ? "protected" : "soldier",
+            protected: isProtected,
+            soldier: isSoldier,
+            actuallyDied: false,
           });
+        } else if (isMayor) {
+          // Mayor bounce: kill bounces to another alive player
+          const otherAlivePlayers = ctx.state.players.filter(
+            (p) => p.alive && p.id !== target!.id && p.id !== player.id
+          );
+          if (otherAlivePlayers.length > 0) {
+            const bounceTarget = otherAlivePlayers[Math.floor(Math.random() * otherAlivePlayers.length)];
+            bounceTarget.alive = false;
+            if (!ctx.serverGameState.nightDeaths) ctx.serverGameState.nightDeaths = [];
+            ctx.serverGameState.nightDeaths.push(bounceTarget.name);
+            await ctx.persistState();
+
+            await ctx.storyLogger.logNightKill({
+              killerName: player.name,
+              targetName: target.name,
+              mayorBounce: true,
+              bouncedTo: bounceTarget.name,
+              actuallyDied: true,
+            });
+          } else {
+            // No one to bounce to — Mayor survives
+            await ctx.storyLogger.logNightKill({
+              killerName: player.name,
+              targetName: target.name,
+              mayorBounce: true,
+              actuallyDied: false,
+            });
+          }
         } else {
           target.alive = false;
           if (!ctx.serverGameState.nightDeaths) ctx.serverGameState.nightDeaths = [];
           ctx.serverGameState.nightDeaths.push(target.name);
-          await ctx.addLog("night:playerDied", { targetName: target.name });
           await ctx.persistState();
+
+          await ctx.storyLogger.logNightKill({
+            killerName: player.name,
+            targetName: target.name,
+            protected: false,
+            soldier: false,
+            actuallyDied: true,
+          });
         }
       }
       await ctx.persistServerState();
     }
   }
   await ctx.sleepAndAdvance(step.playerId);
+}
+
+/** Ravenkeeper chose a player → learn their character. */
+async function resolveNight_ravenkeeper(
+  ctx: NightContext,
+  step: NightStep,
+  player: Player,
+  action: NightAction
+) {
+  if (action.action === "choose" && action.targetIds.length === 1) {
+    const target = ctx.state.players.find(
+      (p) => p.id === action.targetIds[0]
+    );
+
+    if (target) {
+      // Check if Ravenkeeper was drunk/poisoned when they died
+      const isDrunkOrPoisoned =
+        player.states.includes("drunk") || player.states.includes("poisoned");
+
+      let revealedChar: Character = target.character!;
+
+      if (isDrunkOrPoisoned) {
+        // Show a random character as false info
+        const allChars: Character[] = [
+          "washerwoman", "librarian", "investigator", "chef", "empath",
+          "fortune_teller", "undertaker", "monk", "ravenkeeper", "virgin",
+          "slayer", "soldier", "mayor", "butler", "recluse", "saint",
+          "baron", "spy", "poisoner", "scarlet_woman", "imp",
+        ];
+        revealedChar = allChars[Math.floor(Math.random() * allChars.length)];
+      } else {
+        // For Recluse, show a random character matching their registration
+        if (target.trueCharacter === "recluse") {
+          const registration = target.characterRegistration;
+          if (registration === "outsider") {
+            const outsiders: Character[] = ["butler", "drunk", "saint"];
+            revealedChar = outsiders[Math.floor(Math.random() * outsiders.length)];
+          } else if (registration === "minion") {
+            const minions: Character[] = ["poisoner", "spy", "scarlet_woman", "baron"];
+            revealedChar = minions[Math.floor(Math.random() * minions.length)];
+          } else if (registration === "demon") {
+            revealedChar = "imp";
+          }
+        } else {
+          // For non-Recluse, show their true character
+          revealedChar = target.trueCharacter ?? target.character!;
+        }
+      }
+
+      const instruction = `${target.name} is the ${charName(revealedChar)}.`;
+
+      // Log the Ravenkeeper's choice and the information they received
+      await ctx.storyLogger.logNightRavenkeeper({
+        ravenkeeperName: player.name,
+        targetName: target.name,
+        revealedCharacter: revealedChar,
+        actualCharacter: target.trueCharacter ?? target.character!,
+        wasCorrect: !isDrunkOrPoisoned,
+      });
+
+      // Send result to Ravenkeeper
+      ctx.sendToToken(step.playerId, {
+        type: "player:wake",
+        prompt: {
+          character: player.character!,
+          promptType: "info",
+          instruction,
+        },
+      });
+
+      await ctx.setStepPhase("awaiting_acknowledge");
+      return; // Don't advance — wait for player to acknowledge
+    }
+  }
+  await ctx.sleepAndAdvance(step.playerId);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Grimoire builder — used by Spy and for end-of-game display
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * Build structured grimoire entries in seating order with all reminder tokens.
+ * This is shown to the Spy during the game and to the host at game end.
+ */
+export function buildSpyGrimoire(
+  state: RoomState,
+  serverGameState: ServerGameState
+): GrimoireEntry[] {
+  const seating = state.seatingOrder ?? state.players.map((p) => p.id);
+  return seating
+    .map((id) => state.players.find((p) => p.id === id))
+    .filter((p): p is Player => p !== undefined)
+    .map((p) => {
+      const reminderTokens: string[] = [];
+
+      // Butler master
+      const isButlerMaster = Object.values(serverGameState.butlerMasters ?? {}).includes(p.id);
+      if (isButlerMaster) reminderTokens.push("butler-master");
+
+      // Protected (Monk)
+      if (p.states.includes("protected")) reminderTokens.push("protected");
+
+      // Poisoned (Poisoner)
+      if (p.states.includes("poisoned")) reminderTokens.push("poisoned");
+
+      // Drunk (actual drunk, not drunk/poisoned state)
+      if (p.trueCharacter === "drunk") reminderTokens.push("drunk");
+
+      // Died today (executed yesterday)
+      if (serverGameState.lastExecutedPlayerId === p.id) {
+        reminderTokens.push("died-today");
+      }
+
+      // Imp dead (dead imp)
+      if (p.trueCharacter === "imp" && !p.alive) {
+        reminderTokens.push("imp-dead");
+      }
+
+      // Investigator tokens
+      if (serverGameState.investigatorMinion === p.id) {
+        reminderTokens.push("investigator-minion");
+      }
+      if (serverGameState.investigatorWrong === p.id) {
+        reminderTokens.push("investigator-wrong");
+      }
+
+      // Librarian tokens
+      if (serverGameState.librarianOutsider === p.id) {
+        reminderTokens.push("librarian-outsider");
+      }
+      if (serverGameState.librarianWrong === p.id) {
+        reminderTokens.push("librarian-wrong");
+      }
+
+      // Washerwoman tokens
+      if (serverGameState.washerwomanTownsfolk === p.id) {
+        reminderTokens.push("washerwoman-townsfolk");
+      }
+      if (serverGameState.washerwomanWrong === p.id) {
+        reminderTokens.push("washerwoman-wrong");
+      }
+
+      // Fortune Teller red herring
+      if (serverGameState.fortuneTellerRedHerring === p.id) {
+        reminderTokens.push("red-herring");
+      }
+
+      // Scarlet Woman is now Imp
+      if (p.trueCharacter === "imp" && p.character === "imp" && p.alive) {
+        // Check if they were originally scarlet_woman (this is tricky - we'd need to track original character)
+        // For now, skip this one - would need additional state tracking
+      }
+
+      // Slayer no ability
+      if (p.character === "slayer" && !p.ability) {
+        reminderTokens.push("slayer-no-ability");
+      }
+
+      // Virgin no ability
+      if (p.character === "virgin" && !p.ability) {
+        reminderTokens.push("virgin-no-ability");
+      }
+
+      return {
+        playerId: p.id,
+        playerName: p.name,
+        character: p.character!,
+        characterType: p.characterRegistration ?? p.characterType!,
+        states: [...p.states],
+        alive: p.alive,
+        reminderTokens: reminderTokens as any,
+      };
+    });
 }

@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Types
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+import {
+  computeRingSize,
+  computeSeatPosition,
+  getInitials,
+} from "@/lib/circularLayout";
 
 interface PlayerSeat {
   id: string;
@@ -15,20 +16,19 @@ interface PlayerSeat {
 interface CircularSeatingViewProps {
   players: PlayerSeat[];
   seatingOrder: string[];
-  /** Optional: highlight this player ID (e.g. currently nominated). */
+  /** Highlight this player ID (e.g. currently nominated). */
   highlightId?: string;
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Main component — read-only circular seating display
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+/**
+ * Read-only circular seating display.
+ * Shows players arranged in a circle with alive/dead states and optional highlighting.
+ */
 export default function CircularSeatingView({
   players,
   seatingOrder,
   highlightId,
 }: CircularSeatingViewProps) {
-  // Ordered player list from the seating order
   const orderedPlayers = useMemo(
     () =>
       seatingOrder
@@ -37,15 +37,10 @@ export default function CircularSeatingView({
     [seatingOrder, players]
   );
 
-  // Ring dimensions — same breakpoints as the drag version
-  const ringSize = useMemo(() => {
-    const count = orderedPlayers.length;
-    if (count <= 6) return { container: 320, radius: 110 };
-    if (count <= 9) return { container: 380, radius: 140 };
-    if (count <= 12) return { container: 440, radius: 170 };
-    return { container: 500, radius: 200 };
-  }, [orderedPlayers.length]);
-
+  const ringSize = useMemo(
+    () => computeRingSize(orderedPlayers.length),
+    [orderedPlayers.length]
+  );
   const center = ringSize.container / 2;
 
   return (
@@ -82,10 +77,12 @@ export default function CircularSeatingView({
 
         {/* Player seats */}
         {orderedPlayers.map((player, index) => {
-          const angle =
-            (2 * Math.PI * index) / orderedPlayers.length - Math.PI / 2;
-          const x = center + ringSize.radius * Math.cos(angle);
-          const y = center + ringSize.radius * Math.sin(angle);
+          const { x, y } = computeSeatPosition(
+            index,
+            orderedPlayers.length,
+            ringSize.radius,
+            center
+          );
           const isHighlighted = player.id === highlightId;
           const isDead = !player.alive;
 
@@ -144,17 +141,4 @@ export default function CircularSeatingView({
       </div>
     </div>
   );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Helpers
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 }

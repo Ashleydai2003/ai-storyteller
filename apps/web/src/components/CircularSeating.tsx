@@ -19,10 +19,13 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Types
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+import {
+  computeRingSize,
+  computeSeatPosition,
+  getInitials,
+} from "@/lib/circularLayout";
+import CharacterSelection from "./CharacterSelection";
+import type { Character } from "@ai-botc/game-logic";
 
 interface PlayerSeat {
   id: string;
@@ -32,14 +35,13 @@ interface PlayerSeat {
 interface CircularSeatingProps {
   players: PlayerSeat[];
   seatingOrder: string[];
+  selectedCharacters: Character[];
   onReorder: (newOrder: string[]) => void;
+  onToggleCharacter: (character: Character) => void;
   onConfirm: () => void;
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Sortable seat — one player circle in the ring
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+/** Single draggable player seat in the circular arrangement */
 function SortableSeat({
   player,
   index,
@@ -64,9 +66,7 @@ function SortableSeat({
     isDragging: isSortDragging,
   } = useSortable({ id: player.id });
 
-  const angle = (2 * Math.PI * index) / total - Math.PI / 2;
-  const x = center + radius * Math.cos(angle);
-  const y = center + radius * Math.sin(angle);
+  const { x, y } = computeSeatPosition(index, total, radius, center);
 
   const style: React.CSSProperties = {
     position: "absolute",
@@ -113,10 +113,7 @@ function SortableSeat({
   );
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Drag overlay — the circle that follows your finger
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+/** Floating overlay that follows the user's finger/cursor during drag */
 function DragOverlayContent({ player }: { player: PlayerSeat }) {
   return (
     <div className="flex flex-col items-center select-none">
@@ -130,14 +127,17 @@ function DragOverlayContent({ player }: { player: PlayerSeat }) {
   );
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Main circular seating component
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+/**
+ * Drag-and-drop seating arrangement for host setup.
+ * Players can be dragged to swap positions in the circle.
+ * Includes character selection panel.
+ */
 export default function CircularSeating({
   players,
   seatingOrder,
+  selectedCharacters,
   onReorder,
+  onToggleCharacter,
   onConfirm,
 }: CircularSeatingProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -160,14 +160,10 @@ export default function CircularSeating({
     [seatingOrder, players]
   );
 
-  // Ring dimensions — responsive based on player count
-  const ringSize = useMemo(() => {
-    const count = orderedPlayers.length;
-    if (count <= 6) return { container: 320, radius: 110 };
-    if (count <= 9) return { container: 380, radius: 140 };
-    if (count <= 12) return { container: 440, radius: 170 };
-    return { container: 500, radius: 200 };
-  }, [orderedPlayers.length]);
+  const ringSize = useMemo(
+    () => computeRingSize(orderedPlayers.length),
+    [orderedPlayers.length]
+  );
 
   const center = ringSize.container / 2;
 
@@ -200,17 +196,38 @@ export default function CircularSeating({
   }, []);
 
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center w-full max-w-6xl">
       {/* Header */}
       <div className="text-center mb-4">
-        <h1 className="text-3xl font-bold mb-1">Arrange Seating</h1>
+        <h1 className="text-3xl font-bold mb-1">Setup Game</h1>
         <p className="text-gray-400 text-sm">
-          Drag players to arrange them around the table
+          Select characters and arrange seating
         </p>
       </div>
 
-      {/* Circular ring */}
-      <DndContext
+      {/* Two-column layout: Character selection on left, seating on right */}
+      <div className="flex flex-col lg:flex-row gap-6 w-full items-start">
+        {/* Character Selection Panel */}
+        <div className="flex-1 lg:max-w-md w-full">
+          <div className="bg-gray-800 rounded-lg p-4">
+            <h2 className="text-lg font-semibold mb-3 text-gray-300">
+              Select Characters (Optional)
+            </h2>
+            <p className="text-xs text-gray-500 mb-4">
+              Choose specific characters to include. Remaining slots will be filled randomly.
+            </p>
+            <CharacterSelection
+              playerCount={players.length}
+              selectedCharacters={selectedCharacters}
+              onToggle={onToggleCharacter}
+            />
+          </div>
+        </div>
+
+        {/* Seating Arrangement */}
+        <div className="flex-1 flex flex-col items-center w-full">
+          {/* Circular ring */}
+          <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragStart={handleDragStart}
@@ -295,26 +312,15 @@ export default function CircularSeating({
         </div>
       </div>
 
-      {/* Confirm button */}
-      <button
-        onClick={onConfirm}
-        className="w-full max-w-xs bg-red-700 hover:bg-red-600 text-white font-bold py-4 px-8 rounded-lg text-xl transition-colors"
-      >
-        Continue to Night
-      </button>
+          {/* Confirm button */}
+          <button
+            onClick={onConfirm}
+            className="w-full max-w-xs bg-red-700 hover:bg-red-600 text-white font-bold py-4 px-8 rounded-lg text-xl transition-colors"
+          >
+            Finish Setup
+          </button>
+        </div>
+      </div>
     </div>
   );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Helpers
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 }

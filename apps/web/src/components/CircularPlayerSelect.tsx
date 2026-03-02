@@ -2,10 +2,11 @@
 
 import { useMemo } from "react";
 import type { Player } from "@ai-botc/game-logic";
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Types
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+import {
+  computeRingSize,
+  computeSeatPosition,
+  getInitials,
+} from "@/lib/circularLayout";
 
 interface CircularPlayerSelectProps {
   /** All players in the game. */
@@ -14,18 +15,20 @@ interface CircularPlayerSelectProps {
   seatingOrder: string[];
   /** Player IDs that are selectable (from WakePrompt.options). */
   options: string[];
-  /** IDs currently selected. */
+  /** Currently selected player IDs. */
   selectedIds: string[];
   /** Called when a selectable player is tapped. */
   onToggle: (playerId: string) => void;
-  /** The current player's own ID (to mark "You" in the circle). */
+  /** Current player's ID (shows "You" label). */
   myId?: string;
+  /** Hide alive/dead status (for night abilities/day slayer). */
+  hideAliveStatus?: boolean;
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Main component
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+/**
+ * Circular player selection UI for night actions.
+ * Players are arranged in a circle; selectable ones can be tapped to toggle.
+ */
 export default function CircularPlayerSelect({
   players,
   seatingOrder,
@@ -33,8 +36,8 @@ export default function CircularPlayerSelect({
   selectedIds,
   onToggle,
   myId,
+  hideAliveStatus = false,
 }: CircularPlayerSelectProps) {
-  // Ordered player list from seating
   const orderedPlayers = useMemo(
     () =>
       seatingOrder
@@ -43,15 +46,10 @@ export default function CircularPlayerSelect({
     [seatingOrder, players]
   );
 
-  // Ring dimensions — responsive based on player count
-  const ringSize = useMemo(() => {
-    const count = orderedPlayers.length;
-    if (count <= 6) return { container: 300, radius: 105 };
-    if (count <= 9) return { container: 360, radius: 130 };
-    if (count <= 12) return { container: 420, radius: 160 };
-    return { container: 480, radius: 190 };
-  }, [orderedPlayers.length]);
-
+  const ringSize = useMemo(
+    () => computeRingSize(orderedPlayers.length),
+    [orderedPlayers.length]
+  );
   const center = ringSize.container / 2;
 
   return (
@@ -72,14 +70,17 @@ export default function CircularPlayerSelect({
 
       {/* Player seats */}
       {orderedPlayers.map((player, index) => {
-        const angle = (2 * Math.PI * index) / orderedPlayers.length - Math.PI / 2;
-        const x = center + ringSize.radius * Math.cos(angle);
-        const y = center + ringSize.radius * Math.sin(angle);
+        const { x, y } = computeSeatPosition(
+          index,
+          orderedPlayers.length,
+          ringSize.radius,
+          center
+        );
 
         const isSelectable = options.includes(player.id);
         const isSelected = selectedIds.includes(player.id);
         const isMe = player.id === myId;
-        const isDead = !player.alive;
+        const isDead = hideAliveStatus ? false : !player.alive; // Hide dead status if requested
 
         return (
           <button
@@ -136,17 +137,4 @@ export default function CircularPlayerSelect({
       })}
     </div>
   );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Helpers
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-function getInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 }

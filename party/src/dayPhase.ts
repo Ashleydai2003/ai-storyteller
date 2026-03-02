@@ -108,14 +108,20 @@ export function updateBlock(
 
 /**
  * Returns true if the Virgin ability triggers:
- * nominated is the Virgin (not drunk/poisoned) AND nominator is a townsfolk
- * registration (not drunk/poisoned).
+ * - Virgin has ability remaining (first nomination only)
+ * - Virgin is not drunk/poisoned
+ * - Nominator is a townsfolk (by registration)
+ * - Nominator is not drunk/poisoned
+ *
+ * Note: The caller must set nominated.ability = false after this triggers
+ * to consume the one-time ability.
  */
 export function checkVirginAbility(
   nominator: Player,
   nominated: Player
 ): boolean {
   if (nominated.character !== "virgin") return false;
+  if (!nominated.ability) return false; // Already used
   if (nominated.states.includes("drunk") || nominated.states.includes("poisoned"))
     return false;
   if (nominator.characterRegistration !== "townsfolk") return false;

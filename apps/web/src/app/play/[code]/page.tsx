@@ -15,6 +15,10 @@ import CircularPlayerSelect from "@/components/CircularPlayerSelect";
 import CircularGrimoire from "@/components/CircularGrimoire";
 import CircularNominations from "@/components/CircularNominations";
 import DawnAnnouncement from "@/components/DawnAnnouncement";
+import DayTimer from "@/components/DayTimer";
+import CharacterToken from "@/components/CharacterToken";
+import MiniGameContainer from "@/components/minigames/MiniGameContainer";
+import GameLeaderboard from "@/components/GameLeaderboard";
 
 // Generate or restore a stable client token for this room
 function getOrCreateToken(code: string): string {
@@ -249,6 +253,22 @@ export default function PlayerRoom() {
     );
   }
 
+  // Compute player name and create badge component (before phase checks)
+  const seatingOrder = roomState?.seatingOrder ?? players.map((p) => p.id);
+  const myPlayer = players.find((p) => p.id === token);
+  const round = roomState?.roundNumber ?? 1;
+  const displayPlayerName = myPlayer?.name ?? playerName ?? "";
+
+  // Fixed top-left player name badge component
+  function PlayerNameBadge() {
+    if (!displayPlayerName) return null;
+    return (
+      <div className="fixed top-4 left-4 bg-gray-800/90 border border-gray-700 rounded-lg px-4 py-2 z-50">
+        <p className="text-sm font-semibold text-white">{displayPlayerName}</p>
+      </div>
+    );
+  }
+
   // ─── Waiting for game to start ───
   if (phase === "waiting") {
   return (
@@ -290,15 +310,21 @@ export default function PlayerRoom() {
   if (phase === "setup") {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center p-8">
+        <PlayerNameBadge />
         <div className="text-center mb-8">
           <p className="text-gray-400 mb-2">Room {code}</p>
-          <h1 className="text-2xl font-bold mb-6">{playerName}</h1>
         </div>
         {revealedCharacter && revealedCharacterType ? (
           <div className="w-full max-w-sm">
             <div className={`border rounded-xl p-8 text-center ${CHARACTER_TYPE_BG[revealedCharacterType]}`}>
-              <p className="text-sm uppercase tracking-wider text-gray-400 mb-2">Your Character</p>
-              <h2 className="text-4xl font-bold mb-3">{CHARACTER_DISPLAY_NAMES[revealedCharacter]}</h2>
+              <p className="text-sm uppercase tracking-wider text-gray-400 mb-4">Your Character</p>
+              <CharacterToken
+                character={revealedCharacter}
+                characterType={revealedCharacterType}
+                size={180}
+                className="mx-auto mb-4"
+              />
+              <h2 className="text-3xl font-bold mb-2">{CHARACTER_DISPLAY_NAMES[revealedCharacter]}</h2>
               <p className={`text-lg font-semibold ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
                 {CHARACTER_TYPE_DISPLAY[revealedCharacterType]}
               </p>
@@ -314,18 +340,15 @@ export default function PlayerRoom() {
     );
   }
 
-  // Seating order (for circular layouts)
-  const seatingOrder = roomState?.seatingOrder ?? players.map((p) => p.id);
-  const myPlayer = players.find((p) => p.id === token);
-  const round = roomState?.roundNumber ?? 1;
-
   // ─── Night phase ───
   if (phase === "night") {
     if (wakePrompt) {
       // Choose prompt → circular selection
       if (wakePrompt.promptType === "choose") {
         return (
-          <NightChooseScreen
+          <>
+            <PlayerNameBadge />
+            <NightChooseScreen
             wakePrompt={wakePrompt}
             revealedCharacter={revealedCharacter}
             revealedCharacterType={revealedCharacterType}
@@ -342,6 +365,7 @@ export default function PlayerRoom() {
               send({ type: "player:nightAction", action: { action: "none" } });
             }}
           />
+          </>
         );
       }
 
@@ -349,17 +373,21 @@ export default function PlayerRoom() {
       if (wakePrompt.promptType === "grimoire" && wakePrompt.grimoire) {
         return (
           <main className="flex min-h-screen flex-col items-center justify-center p-4 bg-gray-950">
+            <PlayerNameBadge />
             <div className="w-full max-w-lg text-center">
               <h1 className="text-3xl font-bold mb-2 text-yellow-400 animate-pulse">Wake Up!</h1>
               {revealedCharacter && revealedCharacterType && (
-                <div className={`border rounded-xl p-3 mb-4 inline-block ${CHARACTER_TYPE_BG[revealedCharacterType]}`}>
-                  {(myPlayer?.name ?? playerName) && (
-                    <p className="text-sm font-semibold text-white mb-0.5">{myPlayer?.name ?? playerName}</p>
-                  )}
-                  <p className="text-xs text-gray-400">You are the</p>
-                  <p className={`text-xl font-bold ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
-                    {CHARACTER_DISPLAY_NAMES[revealedCharacter]}
-                  </p>
+                <div className={`border rounded-xl p-4 mb-4 inline-flex items-center gap-4 ${CHARACTER_TYPE_BG[revealedCharacterType]}`}>
+                  <CharacterToken
+                    character={revealedCharacter}
+                    characterType={revealedCharacterType}
+                    size={180}
+                  />
+                  <div className="text-left">
+                    <p className={`text-xl font-bold ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
+                      {CHARACTER_DISPLAY_NAMES[revealedCharacter]}
+                    </p>
+                  </div>
                 </div>
               )}
               <p className="text-gray-400 text-sm mb-4">{wakePrompt.instruction}</p>
@@ -378,15 +406,18 @@ export default function PlayerRoom() {
       // Info prompt — show text + "Got it" button
       return (
         <main className="flex min-h-screen flex-col items-center justify-center p-8 bg-gray-950">
+          <PlayerNameBadge />
           <div className="w-full max-w-sm text-center">
             <h1 className="text-4xl font-bold mb-6 text-yellow-400 animate-pulse">Wake Up!</h1>
             {revealedCharacter && revealedCharacterType && (
-              <div className={`border rounded-xl p-4 mb-6 text-center ${CHARACTER_TYPE_BG[revealedCharacterType]}`}>
-                {(myPlayer?.name ?? playerName) && (
-                  <p className="text-base font-semibold text-white mb-1">{myPlayer?.name ?? playerName}</p>
-                )}
-                <p className="text-sm text-gray-400">You are the</p>
-                <p className={`text-2xl font-bold ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
+              <div className={`border rounded-xl p-5 mb-6 text-center ${CHARACTER_TYPE_BG[revealedCharacterType]}`}>
+                <CharacterToken
+                  character={revealedCharacter}
+                  characterType={revealedCharacterType}
+                  size={180}
+                  className="mx-auto mb-3"
+                />
+                <p className={`text-xl font-bold ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
                   {CHARACTER_DISPLAY_NAMES[revealedCharacter]}
                 </p>
               </div>
@@ -419,15 +450,18 @@ export default function PlayerRoom() {
               </div>
             )}
             {revealedCharacterType === "demon" && demonBluffs && demonBluffs.length > 0 && (
-              <div className="bg-gray-800 border border-gray-700 rounded-xl p-6 mb-6">
-                <p className="text-sm uppercase tracking-wider text-gray-400 mb-3">
+              <div className="bg-gray-800 border border-gray-700 rounded-xl p-5 mb-6">
+                <p className="text-sm uppercase tracking-wider text-gray-400 mb-4">
                   These characters are not in play
                 </p>
-                <div className="flex flex-wrap gap-2 justify-center">
+                <div className="flex flex-wrap gap-4 justify-center">
                   {demonBluffs.map((bluff) => (
-                    <span key={bluff} className="bg-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium">
-                      {CHARACTER_DISPLAY_NAMES[bluff]}
-                    </span>
+                    <CharacterToken
+                      key={bluff}
+                      character={bluff}
+                      size={100}
+                      showName
+                    />
                   ))}
                 </div>
               </div>
@@ -443,17 +477,12 @@ export default function PlayerRoom() {
       );
     }
 
-    // Player is sleeping
+    // Player is sleeping - show mini-game
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center p-8 bg-gray-950">
-        <h1 className="text-4xl font-bold mb-4">🌙 Night Time</h1>
-        <p className="text-xl text-gray-400 mb-8">Close your eyes</p>
-        <CharacterBadge
-          revealedCharacter={revealedCharacter}
-          revealedCharacterType={revealedCharacterType}
-          playerName={myPlayer?.name ?? playerName ?? undefined}
-        />
-      </main>
+      <MiniGameContainer
+        roundNumber={roomState?.roundNumber ?? 1}
+        wakePrompt={wakePrompt}
+      />
     );
   }
 
@@ -464,6 +493,7 @@ export default function PlayerRoom() {
 
     return (
       <main className="flex min-h-screen flex-col items-center justify-center p-8">
+        <PlayerNameBadge />
         {showAnnouncement && (
           <DawnAnnouncement
             deaths={deaths}
@@ -482,7 +512,11 @@ export default function PlayerRoom() {
         )}
 
         <h1 className="text-4xl font-bold mb-2">☀️ Day {round}</h1>
-        <p className="text-gray-400 mb-6 text-sm">Discussion time</p>
+        <p className="text-gray-400 mb-4 text-sm">Discussion time</p>
+
+        <DayTimer endsAt={roomState?.dayTimerEndsAt} label="Discussion" compact />
+
+        <div className="mt-4" />
 
         <CharacterBadge
           revealedCharacter={revealedCharacter}
@@ -491,15 +525,18 @@ export default function PlayerRoom() {
         />
 
         {revealedCharacterType === "demon" && demonBluffs && demonBluffs.length > 0 && (
-          <div className="mt-6 bg-gray-800 border border-gray-700 rounded-xl p-6 max-w-sm w-full">
-            <p className="text-sm uppercase tracking-wider text-gray-400 mb-3 text-center">
+          <div className="mt-6 bg-gray-800 border border-gray-700 rounded-xl p-5 max-w-md w-full">
+            <p className="text-sm uppercase tracking-wider text-gray-400 mb-4 text-center">
               These characters are not in play
             </p>
-            <div className="flex flex-wrap gap-2 justify-center">
+            <div className="flex flex-wrap gap-4 justify-center">
               {demonBluffs.map((bluff) => (
-                <span key={bluff} className="bg-gray-700 px-3 py-1.5 rounded-lg text-sm font-medium">
-                  {CHARACTER_DISPLAY_NAMES[bluff]}
-                </span>
+                <CharacterToken
+                  key={bluff}
+                  character={bluff}
+                  size={72}
+                  showName
+                />
               ))}
             </div>
           </div>
@@ -521,22 +558,25 @@ export default function PlayerRoom() {
   // ─── Nomination phase ───
   if (phase === "nomination") {
     const playersOnBlock = roomState?.playersOnBlock ?? [];
-    const canINominate = myPlayer?.alive === true && myPlayer.ableToNominate === true;
+    const canINominate = myPlayer?.ableToNominate === true;
 
     return (
       <main className="flex min-h-screen flex-col items-center p-6">
+        <PlayerNameBadge />
         {announcement && <AnnouncementBanner text={announcement} />}
 
         <div className="text-center mb-4">
           <h1 className="text-2xl font-bold">🗳️ Nominations Open</h1>
           {canINominate ? (
             <p className="text-gray-400 text-sm mt-1">Tap a player to nominate them</p>
-          ) : myPlayer?.alive ? (
-            <p className="text-gray-500 text-sm mt-1">You have already nominated today</p>
           ) : (
-            <p className="text-gray-500 text-sm mt-1">Dead players cannot nominate</p>
+            <p className="text-gray-500 text-sm mt-1">You have already nominated today</p>
           )}
         </div>
+
+        <DayTimer endsAt={roomState?.dayTimerEndsAt} label="Nominations" compact />
+
+        <div className="mt-3" />
 
         <CharacterBadge
           revealedCharacter={revealedCharacter}
@@ -585,6 +625,7 @@ export default function PlayerRoom() {
     const nom = roomState?.pendingNomination;
     return (
       <main className="flex min-h-screen flex-col items-center justify-center p-8 bg-gray-950">
+        <PlayerNameBadge />
         {announcement && <AnnouncementBanner text={announcement} />}
 
         <div className="w-full max-w-sm text-center">
@@ -609,7 +650,11 @@ export default function PlayerRoom() {
               : "Listen to the accusation and defence."}
           </p>
 
-          <p className="text-gray-600 text-xs mt-6">
+          <div className="mt-4">
+            <DayTimer endsAt={roomState?.accusationTimerEndsAt} label="Accusation" compact />
+          </div>
+
+          <p className="text-gray-600 text-xs mt-4">
             The host will start the vote when ready.
           </p>
 
@@ -639,6 +684,7 @@ export default function PlayerRoom() {
     if (!activeVote) {
       return (
         <main className="flex min-h-screen flex-col items-center justify-center p-8">
+          <PlayerNameBadge />
           <p className="text-gray-400">Waiting for vote to start…</p>
         </main>
       );
@@ -646,20 +692,27 @@ export default function PlayerRoom() {
 
     if (isMyVoteTurn) {
       return (
-        <PlayerVoteScreen
+        <>
+          <PlayerNameBadge />
+          <PlayerVoteScreen
           vote={activeVote}
           secondsLeft={voteSecondsLeft}
+          player={players.find(p => p.id === token)}
           onVote={(v) => {
             send({ type: "player:vote", vote: v });
             setIsMyVoteTurn(false);
             if (voteIntervalRef.current) clearInterval(voteIntervalRef.current);
           }}
         />
+        </>
       );
     }
 
     return (
-      <PlayerVoteWaitScreen vote={activeVote} players={players} myId={token} />
+      <>
+        <PlayerNameBadge />
+        <PlayerVoteWaitScreen vote={activeVote} players={players} myId={token} />
+      </>
     );
   }
 
@@ -672,14 +725,15 @@ export default function PlayerRoom() {
     const iWon = myTeam === winner;
     return (
       <main
-        className="flex min-h-screen flex-col items-center justify-center p-8 text-center"
+        className="flex min-h-screen flex-col items-center p-8 text-center overflow-y-auto"
         style={{
           background: isEvilWin
             ? "linear-gradient(to bottom, #0f0000 0%, #1a0000 100%)"
             : "linear-gradient(to bottom, #000a0f 0%, #00101a 100%)",
         }}
       >
-        <div className="text-7xl mb-6">{isEvilWin ? "😈" : "😇"}</div>
+        <PlayerNameBadge />
+        <div className="text-7xl mb-6 mt-8">{isEvilWin ? "😈" : "😇"}</div>
         <h1 className={`text-5xl font-extrabold mb-2 ${isEvilWin ? "text-red-400" : "text-blue-300"}`}>
           {isEvilWin ? "Evil Wins!" : "Good Wins!"}
         </h1>
@@ -697,6 +751,16 @@ export default function PlayerRoom() {
             </p>
           </div>
         )}
+
+        {/* Mini-game leaderboard */}
+        {roomState?.miniGameLeaderboard && Object.keys(roomState.miniGameLeaderboard).length > 0 && (
+          <GameLeaderboard
+            leaderboard={roomState.miniGameLeaderboard}
+            myPlayerId={myPlayer?.id}
+          />
+        )}
+
+        <div className="mb-8" />
       </main>
     );
   }
@@ -756,14 +820,17 @@ function NightChooseScreen({
       <div className="w-full max-w-lg text-center">
         <h1 className="text-3xl font-bold mb-4 text-yellow-400 animate-pulse">Wake Up!</h1>
         {revealedCharacter && revealedCharacterType && (
-          <div className={`border rounded-xl p-3 mb-4 inline-block ${CHARACTER_TYPE_BG[revealedCharacterType]}`}>
-            {playerName && (
-              <p className="text-sm font-semibold text-white mb-0.5">{playerName}</p>
-            )}
-            <p className="text-xs text-gray-400">You are the</p>
-            <p className={`text-xl font-bold ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
-              {CHARACTER_DISPLAY_NAMES[revealedCharacter]}
-            </p>
+          <div className={`border rounded-xl p-4 mb-4 inline-flex items-center gap-4 ${CHARACTER_TYPE_BG[revealedCharacterType]}`}>
+            <CharacterToken
+              character={revealedCharacter}
+              characterType={revealedCharacterType}
+              size={180}
+            />
+            <div className="text-left">
+              <p className={`text-xl font-bold ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
+                {CHARACTER_DISPLAY_NAMES[revealedCharacter]}
+              </p>
+            </div>
           </div>
         )}
         <div className="bg-gray-800 border border-gray-600 rounded-xl p-4 mb-4">
@@ -780,6 +847,7 @@ function NightChooseScreen({
             selectedIds={selectedIds}
             onToggle={togglePlayer}
             myId={myId}
+            hideAliveStatus={true}
           />
         </div>
         <button
@@ -811,13 +879,19 @@ import type { ActiveVote } from "@ai-botc/game-logic";
 function PlayerVoteScreen({
   vote,
   secondsLeft,
+  player,
   onVote,
 }: {
   vote: ActiveVote;
   secondsLeft: number;
+  player?: Player;
   onVote: (v: boolean) => void;
 }) {
   const urgent = secondsLeft <= 3;
+  const isDead = player && !player.alive;
+  const hasUsedDeadVote = player && player.deadVoted;
+  const isDeadVote = isDead && !hasUsedDeadVote;
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-center p-8 bg-gray-950">
       <div className="w-full max-w-sm text-center">
@@ -827,6 +901,13 @@ function PlayerVoteScreen({
           <span className="text-gray-500 mx-1">nominated</span>
           <span className="text-red-400 font-semibold">{vote.nominatedName}</span>
         </p>
+
+        {/* Dead vote warning */}
+        {hasUsedDeadVote && (
+          <p className="text-yellow-500 text-sm mb-4">
+            You have already used your dead vote
+          </p>
+        )}
 
         {/* Timer ring */}
         <div className={`text-6xl font-mono font-bold mb-6 tabular-nums ${urgent ? "text-red-400 animate-pulse" : "text-yellow-300"}`}>
@@ -838,7 +919,7 @@ function PlayerVoteScreen({
             onClick={() => onVote(true)}
             className="flex-1 bg-green-700 hover:bg-green-600 active:scale-95 text-white font-bold py-6 text-2xl rounded-xl transition-all"
           >
-            ✓ Yes
+            {isDeadVote ? "💀 Dead Vote" : "✓ Yes"}
           </button>
           <button
             onClick={() => onVote(false)}
@@ -942,7 +1023,8 @@ function SlayerButton({
 }) {
   const [showSelect, setShowSelect] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
-  const livingOthers = players.filter((p) => p.alive && p.id !== myId).map((p) => p.id);
+  // Slayer can target anyone except themselves (alive or dead)
+  const others = players.filter((p) => p.id !== myId).map((p) => p.id);
 
   if (!showSelect) {
     return (
@@ -961,10 +1043,11 @@ function SlayerButton({
       <CircularPlayerSelect
         players={players}
         seatingOrder={seatingOrder}
-        options={livingOthers}
+        options={others}
         selectedIds={selectedTarget ? [selectedTarget] : []}
         onToggle={(id) => setSelectedTarget(id)}
         myId={myId}
+        hideAliveStatus={true}
       />
       <div className="flex gap-3 mt-3 justify-center">
         <button
@@ -1004,15 +1087,13 @@ function CharacterBadge({
 
   if (compact) {
     return (
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg px-4 py-2 inline-flex gap-3 items-center">
-        {playerName && (
-          <>
-            <span className="text-white font-semibold text-sm">{playerName}</span>
-            <span className="text-gray-600">·</span>
-          </>
-        )}
-        <span className="text-sm text-gray-500">You are the</span>
-        <span className={`font-bold text-base ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
+      <div className="bg-gray-800/50 border border-gray-700 rounded-lg px-3 py-2 inline-flex gap-3 items-center">
+        <CharacterToken
+          character={revealedCharacter}
+          characterType={revealedCharacterType}
+          size={48}
+        />
+        <span className={`font-bold text-sm ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
           {CHARACTER_DISPLAY_NAMES[revealedCharacter]}
         </span>
       </div>
@@ -1020,12 +1101,14 @@ function CharacterBadge({
   }
 
   return (
-    <div className="bg-gray-800/50 border border-gray-700 rounded-lg px-6 py-3 text-center">
-      {playerName && (
-        <p className="text-lg font-semibold text-white mb-1">{playerName}</p>
-      )}
-      <p className="text-sm text-gray-500">You are the</p>
-      <p className={`font-bold ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
+    <div className="bg-gray-800/50 border border-gray-700 rounded-lg px-6 py-5 text-center">
+      <CharacterToken
+        character={revealedCharacter}
+        characterType={revealedCharacterType}
+        size={180}
+        className="mx-auto mb-3"
+      />
+      <p className={`font-bold text-lg ${CHARACTER_TYPE_COLORS[revealedCharacterType]}`}>
         {CHARACTER_DISPLAY_NAMES[revealedCharacter]}
       </p>
     </div>

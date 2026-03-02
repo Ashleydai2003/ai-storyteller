@@ -4,6 +4,10 @@ export * from "./types";
 // Export character utilities (includes PLAYER_DISTRIBUTION)
 export * from "./characters";
 
+// Export new character system (Phase 1)
+export * from "./characterDefinitions";
+export * from "./characterSetup";
+
 // Canonical night wake order — includes special meta-steps.
 // Characters not in play are simply skipped at runtime.
 
@@ -26,7 +30,7 @@ export const OTHER_NIGHT_ORDER = [
   "monk",
   // "scarlet_woman", // TODO
   "imp",             // Resolved by registration (handles starpass)
-  // "ravenkeeper",   // TODO
+  "ravenkeeper",     // Wakes only if killed tonight
   "empath",
   "fortune_teller",
   "undertaker",

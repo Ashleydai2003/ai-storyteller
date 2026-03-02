@@ -1,3 +1,9 @@
+/**
+ * WebSocket hook for PartyKit connection.
+ *
+ * Manages the WebSocket lifecycle and provides typed message handling.
+ * Uses refs for callbacks to avoid reconnecting when handlers change.
+ */
 import { useEffect, useRef, useCallback, useState } from "react";
 import PartySocket from "partysocket";
 import type { ClientMessage, ServerMessage, RoomState } from "@ai-botc/game-logic";
@@ -5,12 +11,22 @@ import type { ClientMessage, ServerMessage, RoomState } from "@ai-botc/game-logi
 const PARTYKIT_HOST = process.env.NEXT_PUBLIC_PARTYKIT_HOST || "localhost:1999";
 
 interface UsePartySocketOptions {
+  /** Room code to connect to (case-insensitive) */
   roomCode: string;
+  /** Called for every server message */
   onMessage?: (message: ServerMessage) => void;
+  /** Called specifically for state sync messages */
   onStateSync?: (state: RoomState) => void;
+  /** Called when server sends an error message */
   onError?: (error: string) => void;
 }
 
+/**
+ * Hook that maintains a WebSocket connection to a PartyKit room.
+ *
+ * @returns send - Function to send typed messages to the server
+ * @returns isConnected - Whether the socket is currently connected
+ */
 export function usePartySocket({
   roomCode,
   onMessage,
@@ -37,29 +53,21 @@ export function usePartySocket({
 
     // Track if this effect instance is still active (handles React Strict Mode)
     let isActive = true;
-    console.log(`[SOCKET] Creating socket for room: ${roomCode}`);
 
     const socket = new PartySocket({
       host: PARTYKIT_HOST,
       room: roomCode.toLowerCase(),
     });
 
-    // Assign socket to ref BEFORE adding event listeners
     socketRef.current = socket;
 
     socket.addEventListener("open", () => {
-      // Only update state if this effect instance is still active
-      if (!isActive) {
-        console.log(`[SOCKET] Ignoring open event for stale socket`);
-        return;
-      }
-      console.log(`[SOCKET] Socket opened for room: ${roomCode}, readyState: ${socket.readyState}`);
+      if (!isActive) return;
       setIsConnected(true);
     });
 
     socket.addEventListener("close", () => {
       if (!isActive) return;
-      console.log(`[SOCKET] Socket closed for room: ${roomCode}`);
       setIsConnected(false);
     });
 
@@ -67,7 +75,6 @@ export function usePartySocket({
       if (!isActive) return;
       try {
         const message = JSON.parse(event.data) as ServerMessage;
-        console.log(`[SOCKET] Received message:`, message.type);
 
         if (message.type === "sync" && onStateSyncRef.current) {
           onStateSyncRef.current(message.state);
@@ -80,13 +87,12 @@ export function usePartySocket({
         if (onMessageRef.current) {
           onMessageRef.current(message);
         }
-      } catch (e) {
-        console.error("Failed to parse message:", e);
+      } catch {
+        // Parse error — ignore malformed messages
       }
     });
 
     return () => {
-      console.log(`[SOCKET] Cleaning up socket for room: ${roomCode}`);
       isActive = false;
       socket.close();
       socketRef.current = null;
@@ -95,37 +101,18 @@ export function usePartySocket({
 
   const send = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
-    console.log(`[CLIENT SEND] Attempting to send:`, message);
-    console.log(`[CLIENT SEND] Socket exists:`, !!socket);
-    if (socket) {
-      console.log(`[CLIENT SEND] Ready state:`, socket.readyState);
-      // PartySocket extends ReconnectingWebSocket which has its own OPEN constant
-      console.log(`[CLIENT SEND] Socket OPEN constant:`, socket.OPEN);
-    }
-
-    // Use socket's own OPEN constant instead of global WebSocket.OPEN
-    // to handle ReconnectingWebSocket properly
     if (socket && socket.readyState === socket.OPEN) {
-      console.log(`[CLIENT SEND] Sending message...`);
       socket.send(JSON.stringify(message));
     } else {
-      console.log(`[CLIENT SEND] Socket not ready, message not sent. Will retry in 100ms...`);
       // Retry after a short delay in case socket is still connecting
       setTimeout(() => {
         const retrySocket = socketRef.current;
         if (retrySocket && retrySocket.readyState === retrySocket.OPEN) {
-          console.log(`[CLIENT SEND] Retry successful, sending message...`);
           retrySocket.send(JSON.stringify(message));
-        } else {
-          console.log(`[CLIENT SEND] Retry failed, socket still not ready`);
         }
       }, 100);
     }
   }, []);
 
-  return {
-    send,
-    isConnected,
-    socket: socketRef.current,
-  };
+  return { send, isConnected };
 }

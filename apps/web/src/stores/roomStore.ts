@@ -1,3 +1,10 @@
+/**
+ * Client-side state store for room and player data.
+ *
+ * Combines two sources of truth:
+ * - `roomState`: Synced from server via WebSocket (shared state)
+ * - Player-specific fields: Set from targeted server messages (private to this client)
+ */
 import { create } from "zustand";
 import type {
   RoomState,
@@ -67,7 +74,10 @@ export const useRoomStore = create<RoomStore>((set) => ({
   reset: () => set(initialState),
 }));
 
-// Selector helpers - return stable references to avoid infinite loops
+/**
+ * Selector helpers - return stable references to avoid infinite re-renders.
+ * Use these with useRoomStore(selectX) pattern.
+ */
 export const selectPlayers = (state: RoomStore): Player[] =>
   state.roomState?.players ?? EMPTY_PLAYERS;
 
