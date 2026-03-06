@@ -516,14 +516,6 @@ export default function PlayerRoom() {
 
         <DayTimer endsAt={roomState?.dayTimerEndsAt} label="Discussion" compact />
 
-        <div className="mt-4" />
-
-        <CharacterBadge
-          revealedCharacter={revealedCharacter}
-          revealedCharacterType={revealedCharacterType}
-          playerName={myPlayer?.name ?? playerName ?? undefined}
-        />
-
         {revealedCharacterType === "demon" && demonBluffs && demonBluffs.length > 0 && (
           <div className="mt-6 bg-gray-800 border border-gray-700 rounded-xl p-5 max-w-md w-full">
             <p className="text-sm uppercase tracking-wider text-gray-400 mb-4 text-center">
@@ -575,15 +567,6 @@ export default function PlayerRoom() {
         </div>
 
         <DayTimer endsAt={roomState?.dayTimerEndsAt} label="Nominations" compact />
-
-        <div className="mt-3" />
-
-        <CharacterBadge
-          revealedCharacter={revealedCharacter}
-          revealedCharacterType={revealedCharacterType}
-          playerName={myPlayer?.name ?? playerName ?? undefined}
-          compact
-        />
 
         <div className="mt-4">
           <CircularNominations
@@ -657,12 +640,6 @@ export default function PlayerRoom() {
           <p className="text-gray-600 text-xs mt-4">
             The host will start the vote when ready.
           </p>
-
-          <CharacterBadge
-            revealedCharacter={revealedCharacter}
-            revealedCharacterType={revealedCharacterType}
-            compact
-          />
 
           {/* Slayer can still act during accusation */}
           {myPlayer?.character === "slayer" && myPlayer.ability && myPlayer.alive && (

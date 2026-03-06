@@ -1293,7 +1293,7 @@ export default class RoomServer implements Party.Server {
     // Slayer kills actual demons only (not Recluse who may register as demon)
     if (abilityWorks && target.characterType === "demon") {
       target.alive = false;
-        await this.storyLogger.logSlayAttempt({
+      await this.storyLogger.logSlayAttempt({
         slayerName: slayer.name,
         targetName: target.name,
         success: true,
@@ -1301,23 +1301,20 @@ export default class RoomServer implements Party.Server {
       console.log(`[GAME] Slayer ${slayer.name} slays the Demon ${target.name}!`);
       this.broadcast({
         type: "game:announcement",
-        text: `💀 ${target.name} mysteriously died.`,
+        text: `${target.name} died mysteriously.`,
       });
 
       // ── Win condition: Slayer killed the Demon → Good wins ──
       if (await this.applyWinIfOver("slayerKill")) return;
     } else {
-        await this.storyLogger.logSlayAttempt({
+      await this.storyLogger.logSlayAttempt({
         slayerName: slayer.name,
         targetName: target.name,
         success: false,
         reason: !abilityWorks ? "drunk/poisoned" : "not_demon",
       });
       console.log(`[GAME] Slayer ${slayer.name} slays ${target.name} — nothing happens.`);
-      this.broadcast({
-        type: "game:announcement",
-        text: `🗡️ ${slayer.name} uses the Slayer ability on ${target.name}… nothing happens.`,
-      });
+      // No global announcement on unsuccessful slay - keeps information hidden
     }
 
     await this.persistAndBroadcast();

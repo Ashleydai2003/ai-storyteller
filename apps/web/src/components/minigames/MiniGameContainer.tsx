@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useMiniGameStore } from "@/stores/miniGameStore";
 import PauseOverlay from "./PauseOverlay";
 import ScoreDisplay from "./ScoreDisplay";
-import DinoGame from "./DinoGame";
+import MemoryGame from "./MemoryGame";
 
 interface MiniGameContainerProps {
   roundNumber: number;
@@ -51,13 +51,13 @@ export default function MiniGameContainer({ roundNumber, wakePrompt }: MiniGameC
 
       {/* Game title */}
       <div className="absolute top-4 left-4 z-40">
-        <h2 className="text-2xl font-bold text-gray-300">Dino Jump</h2>
+        <h2 className="text-2xl font-bold text-gray-300">Memory</h2>
         <p className="text-sm text-gray-500">Night {roundNumber}</p>
       </div>
 
       {/* Game content */}
       <div className="w-full h-full">
-        <DinoGame />
+        <MemoryGame />
       </div>
 
       {/* Pause overlay with countdown */}
