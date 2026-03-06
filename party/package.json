@@ -10,7 +10,7 @@
   "dependencies": {
     "@ai-botc/game-logic": "workspace:*",
     "@ai-botc/ai-storyteller": "workspace:*",
-    "partykit": "^0.0.111"
+    "partykit": "^0.0.115"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

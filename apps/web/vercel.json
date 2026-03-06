@@ -1,0 +1,4 @@
+{
+  "installCommand": "cd ../.. && npm install -g pnpm@9 && pnpm install --frozen-lockfile",
+  "buildCommand": "cd ../.. && pnpm turbo run build --filter=@ai-botc/web"
+}
